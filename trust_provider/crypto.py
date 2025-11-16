@@ -51,10 +51,9 @@ def sha256_hex(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 
-def sign_with_secret(secret: str, data: Any) -> str:
-    """Deterministic signature stub using secret + canonical_json(data)."""
+def sign_with_secret(secret: Any, data: Any) -> str:
     payload = canonical_json(data)
-    return sha256_hex(secret + "|" + payload)
+    return sha256_hex(str(secret) + "|" + payload)
 
 
 def verify_with_secret(secret: str, data: Any, signature: str) -> bool:

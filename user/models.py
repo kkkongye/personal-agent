@@ -6,14 +6,13 @@ from typing import Dict, Any, Optional
 class PIIModel(BaseModel):
     name: str
     id_number: str
+    id_card_number: Optional[str] = None
     email: Optional[str] = None
 
 
 class BIModel(BaseModel):
-    # Behavior / activity indicators (stubbed)
-    login_count: int = 0
     last_login_ip: Optional[str] = None
-    reputation_score: float = 0.0
+    passport_number: Optional[str] = None
 
 
 class UserInfo(BaseModel):
