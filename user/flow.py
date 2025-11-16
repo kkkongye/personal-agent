@@ -16,14 +16,12 @@ def local_issue(user: UserInfo, user_secret: str = "user_secret") -> Dict[str, A
     Maps AF/CMI into TP's fallback payload (af, cmi, cdid, ecid).
     Returns {af_result, phc_response}
     """
-    # Lazy import to avoid hard dependency at import time
-    from octopus.trust_provider.service import issue_phc
-    from octopus.trust_provider.service import ASOCompleteModel
+    from trust_provider.issue_phc import issue_phc, ASOCompleteModel, AP_DL_PK, TP_DL_PK
 
     r_bind = compute_r_bind()
     pii = user.pii.model_dump()
     bi = user.bi.model_dump()
-    af = compute_af_dl(user.pii.id_number, pk_ap=0, pk_tp=0, r_bind_hex=r_bind)
+    af = compute_af_dl(user.pii.id_number, pk_ap=AP_DL_PK, pk_tp=TP_DL_PK, r_bind_hex=r_bind)
     cmi = compute_cmi(pii)
 
     # Optional user signature over request (not currently verified by TP stub)
@@ -40,6 +38,10 @@ def local_issue(user: UserInfo, user_secret: str = "user_secret") -> Dict[str, A
 
 
 def remote_issue(base_url: str, user: UserInfo) -> PHCResponse:
-    from .client import request_phc_remote
-
+    from .apply_agent import request_phc_remote
     return request_phc_remote(base_url, user)
+
+
+def remote_request_pa(base_url: str, phc: Dict[str, Any], user: UserInfo) -> Dict[str, Any]:
+    from .apply_agent import request_pa_remote
+    return request_pa_remote(base_url, phc, user)
