@@ -10,6 +10,6 @@ Note: This is a lightweight module (no server). Replace stub crypto with real
 implementations and wire DID/SCID in production.
 """
 
-from . import crypto, models, client, flow
+from . import crypto, models
 
-__all__ = ["crypto", "models", "client", "flow"]
+__all__ = ["crypto", "models"]

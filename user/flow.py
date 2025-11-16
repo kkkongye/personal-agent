@@ -7,7 +7,7 @@ Two modes:
 from typing import Dict, Any, Optional
 
 from .models import UserInfo, AFResult, PHCResponse
-from .crypto import compute_r_bind, compute_af, compute_cmi, sign_with_secret
+from .crypto import compute_r_bind, compute_af_dl, compute_cmi, sign_with_secret
 
 
 def local_issue(user: UserInfo, user_secret: str = "user_secret") -> Dict[str, Any]:
@@ -23,7 +23,7 @@ def local_issue(user: UserInfo, user_secret: str = "user_secret") -> Dict[str, A
     r_bind = compute_r_bind()
     pii = user.pii.model_dump()
     bi = user.bi.model_dump()
-    af = compute_af(pii, bi, r_bind)
+    af = compute_af_dl(user.pii.id_number, pk_ap=0, pk_tp=0, r_bind_hex=r_bind)
     cmi = compute_cmi(pii)
 
     # Optional user signature over request (not currently verified by TP stub)

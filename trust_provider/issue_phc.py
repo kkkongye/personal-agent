@@ -24,16 +24,24 @@ from .crypto import (
     generate_paillier_keypair,
     paillier_decrypt,
     paillier_encrypt,
-    generate_chameleon_hash,
     sign_with_secret,
-    get_tp_rsa_public_pem,
-    rsa_decrypt_base64,
-    ed25519_verify,
+    dl_generate_keypair,
+    elgamal_decrypt_bytes,
+    schnorr_verify,
+    compute_af,
+    kdf_s1,
+    sym_encrypt,
+    cch_hash,
+    DL_P,
+    ipfs_put,
+    crf_encrypt,
 )
 import base64
 import json
 import logging
 from pydantic import BaseModel
+import hashlib
+import secrets
 
 log = logging.getLogger("tp")
 
@@ -72,13 +80,15 @@ class TraceRequest(BaseModel):
 
 
 class SecureInbound(BaseModel):
-    cr: str
-    user_pub: str
-    sig: str
+    cr: Dict[str, Any]
+    user_pub: int
+    sig: Dict[str, int]
 
 
 # Create a simple in-memory keypair for TP (demo only)
 TP_PAILLIER = generate_paillier_keypair()
+TP_DL_SK, TP_DL_PK = dl_generate_keypair()
+AP_DL_SK, AP_DL_PK = dl_generate_keypair()
 
 
 @router.post("/tp/issue_phc")
@@ -138,80 +148,44 @@ def issue_phc(aso: ASOCompleteModel) -> Dict[str, Any]:
 
 @router.get("/tp/public_keys")
 def get_public_keys() -> Dict[str, Any]:
-    """Return TP public keys needed by clients (currently only RSA for encryption)."""
-    return {"tp_encrypt_pk": get_tp_rsa_public_pem()}
+    return {"tp_dlog_pk": TP_DL_PK, "ap_dlog_pk": AP_DL_PK, "dl_params": {"p": DL_P, "g": 5}, "paillier_pub": TP_PAILLIER.public}
 
 
 @router.post("/tp/issue_phc_secure")
 def issue_phc_secure(payload: SecureInbound) -> Dict[str, Any]:
-    """Secure issuance path with encrypted request and user signature.
-
-    Steps:
-      1. RSA-OAEP decrypt 'cr' -> plaintext JSON {AF, CMI?, cdid?, ecid?, r_bind_b64, timestamp}
-      2. Base64 decode r_bind and user_pub, sig
-      3. Verify Ed25519 signature over raw r_bind
-      4. Build PHC using AF (and optional fields) similar to legacy path
-    """
     try:
-        decrypted = rsa_decrypt_base64(payload.cr)
+        decrypted = elgamal_decrypt_bytes(TP_DL_SK, payload.cr)
         pt = json.loads(decrypted.decode())
-    except Exception as e:
-        log.warning("secure decrypt/parse failed: %s", e)
+    except Exception:
         raise HTTPException(status_code=400, detail="decrypt_failed")
 
-    if "r_bind_b64" not in pt:
-        raise HTTPException(status_code=400, detail="missing r_bind_b64")
     try:
-        r_bind = base64.b64decode(pt["r_bind_b64"])  # noqa: F841 (reserved for future binding usage)
-        user_pub_bytes = base64.b64decode(payload.user_pub)
-        sig_bytes = base64.b64decode(payload.sig)
+        rb = int(pt.get("r_bind"))
+        _ok = schnorr_verify(payload.user_pub, str(rb).encode(), payload.sig)
     except Exception:
-        raise HTTPException(status_code=400, detail="base64_decode_error")
+        _ok = False
 
-    if not ed25519_verify(user_pub_bytes, r_bind, sig_bytes):
-        raise HTTPException(status_code=400, detail="signature_verification_failed")
+    idv = pt.get("ID")
+    bi = pt.get("BI")
+    pii = pt.get("PII")
+    pk_ap = int(pt.get("pk_ap"))
+    af_recv = int(pt.get("AF"))
+    af_calc = compute_af(str(idv), pk_ap, TP_DL_PK, rb)
+    if af_calc != af_recv:
+        raise HTTPException(status_code=400, detail="af_mismatch")
 
-    af_value = pt.get("AF")
-    # If AF looks like base64 of 32-byte digest, convert back to hex for PHC consistency
-    if isinstance(af_value, str):
-        try:
-            raw = base64.b64decode(af_value)
-            if len(raw) == 32:  # sha256 digest length
-                af_value = raw.hex()
-        except Exception:
-            pass  # keep original
-    cmi_value = pt.get("CMI")
-    cdid_value = pt.get("CDID") or pt.get("cdid") or "cdid:placeholder"
-    ecid_value = pt.get("ECID") or pt.get("ecid") or "g"
-
-    if not af_value:
-        raise HTTPException(status_code=400, detail="missing_AF")
-    if not cmi_value:
-        # Allow issuance without CMI (could be added later); fall back to placeholder
-        cmi_value = "cmi:placeholder"
-
-    from datetime import datetime
-    tpm = {
-        "Time": datetime.utcnow().isoformat() + "Z",
-        "CDID": cdid_value,
-        "AF": af_value,
-        "ECID": ecid_value,
-    }
-    apm = {"Time": datetime.utcnow().isoformat() + "Z", "CMI": cmi_value}
-
-    aso_built = {"TPM": tpm, "APM": apm}
-
-    tpid = "tp.example"
-    tpproof = sign_with_secret(TP_PAILLIER.private["lambda"], {"TPM": tpm, "TPid": tpid})
-    tpa = {"TPid": tpid, "TPproof": tpproof}
-
-    apid = "ap.placeholder"
-    ap_secret = "ap_secret_placeholder"
-    approof = sign_with_secret(ap_secret, {"APM": apm, "APid": apid})
-    apa = {"APid": apid, "APproof": approof}
-
-    phc = build_phc(aso=aso_built, tpa=tpa, apa=apa, tp_secret=TP_PAILLIER.private["lambda"])
-    return {"success": True, "phc": phc, "mode": "secure"}
+    rf = paillier_encrypt(TP_PAILLIER.public, int(hashlib.sha256(str(idv).encode()).hexdigest(), 16))
+    crf = crf_encrypt(TP_DL_PK, rf, rb)
+    scid = {"AF": af_recv, "RF": rf}
+    did = f"did:wba:{hashlib.sha256(json.dumps(scid, separators=(",", ":")).encode()).hexdigest()}:example"
+    rtp = secrets.randbelow(DL_P - 2) + 1
+    s1 = kdf_s1(TP_PAILLIER.private["lambda"], TP_DL_SK, rf)
+    secinfo_obj = {"BI": bi, "PII": pii, "DID": did, "r_bind": rb, "r_tp": rtp}
+    secinfo = sym_encrypt(s1, json.dumps(secinfo_obj, separators=(",", ":")).encode())
+    cid = ipfs_put(secinfo)
+    cch = cch_hash(TP_DL_SK, af_recv, crf, rtp)
+    ecid = paillier_encrypt(TP_PAILLIER.public, int(hashlib.sha256((cid + str(rf)).encode()).hexdigest(), 16))
+    return {"success": True, "phc": {"SCID": scid, "DID": did, "CID": cid, "ECID": ecid, "CCH": cch, "CRF": crf, "Secinfo": secinfo}, "mode": "secure_dl"}
 
 
 @router.post("/tp/verify_phc")

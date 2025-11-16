@@ -9,12 +9,14 @@ import secrets
 import time
 import base64
 from .crypto import (
-    compute_af,
     compute_cmi,
     compute_r_bind,
-    generate_user_ed25519,
-    sign_r_bind,
-    encrypt_issue_plaintext,
+    dl_generate_user_keypair,
+    schnorr_sign,
+    elgamal_encrypt_bytes,
+    compute_af_dl,
+    sha256_hex,
+    canonical_json,
 )
 from .models import UserInfo, PHCResponse
 
@@ -26,7 +28,7 @@ def request_phc_remote(base_url: str, user: UserInfo) -> PHCResponse:
     Sends flat fields (af, cmi, cdid, ecid) which TP service will expand.
     """
     r_bind = compute_r_bind()
-    af = compute_af(user.pii.model_dump(), user.bi.model_dump(), r_bind)
+    af = sha256_hex(canonical_json({"pii": user.pii.model_dump(), "bi": user.bi.model_dump(), "r_bind": r_bind, "pk_ap": "ap.pk.placeholder"}))
     cmi = compute_cmi(user.pii.model_dump())
 
     payload = {
@@ -58,28 +60,16 @@ def request_phc_secure(base_url: str, user: UserInfo) -> PHCResponse:
     pub_resp = httpx.get(base_url.rstrip("/") + "/v1/tp/public_keys", timeout=10.0)
     pub_resp.raise_for_status()
     tp_keys = pub_resp.json()
-    tp_encrypt_pk = tp_keys["tp_encrypt_pk"]
+    tp_dlog_pk = tp_keys["tp_dlog_pk"]
+    ap_dlog_pk = tp_keys["ap_dlog_pk"]
 
-    sk_bytes, pk_bytes = generate_user_ed25519()
-    r_bind_bytes = secrets.token_bytes(32)
-    af_hex = compute_af(user.pii.model_dump(), user.bi.model_dump(), r_bind_bytes.hex())
-    af_b64 = base64.b64encode(bytes.fromhex(af_hex)).decode()
-
-    plaintext = {
-        "AF": af_b64,
-        "CDID": user.cdid,
-        "ECID": user.ecid,
-        "r_bind_b64": base64.b64encode(r_bind_bytes).decode(),
-        "timestamp": int(time.time()),
-    }
-    cr_b64 = encrypt_issue_plaintext(tp_encrypt_pk, plaintext)
-    sig_bytes = sign_r_bind(sk_bytes, r_bind_bytes)
-
-    payload = {
-        "cr": cr_b64,
-        "user_pub": base64.b64encode(pk_bytes).decode(),
-        "sig": base64.b64encode(sig_bytes).decode(),
-    }
+    sk_a, pk_a = dl_generate_user_keypair()
+    r_bind_int = int(secrets.token_hex(16), 16)
+    af_val = compute_af_dl(user.pii.id_number, ap_dlog_pk, tp_dlog_pk, hex(r_bind_int)[2:])
+    plaintext = {"AF": af_val, "ID": user.pii.id_number, "BI": user.bi.model_dump(), "PII": user.pii.model_dump(), "pk_ap": ap_dlog_pk, "r_bind": r_bind_int, "timestamp": int(time.time())}
+    cr = elgamal_encrypt_bytes(tp_dlog_pk, plaintext)
+    sig = schnorr_sign(sk_a, str(r_bind_int).encode())
+    payload = {"cr": cr, "user_pub": pk_a, "sig": sig}
     url = base_url.rstrip("/") + "/v1/tp/issue_phc_secure"
     resp = httpx.post(url, json=payload, timeout=15.0)
     resp.raise_for_status()

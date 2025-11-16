@@ -14,7 +14,7 @@ import json
 import secrets
 from .crypto import (
     canonical_json,
-    generate_chameleon_hash,
+    sha256_hex,
     sign_with_secret,
     verify_with_secret,
 )
@@ -50,8 +50,8 @@ def build_phc(
     tpm_tpa = {"TPM": aso.get("TPM", {}), "TPA": tpa}
     apm_apa = {"APM": aso.get("APM", {}), "APA": apa}
 
-    tpch = generate_chameleon_hash(canonical_json(tpm_tpa))["hash"]
-    apch = generate_chameleon_hash(canonical_json(apm_apa))["hash"]
+    tpch = sha256_hex(canonical_json(tpm_tpa))
+    apch = sha256_hex(canonical_json(apm_apa))
 
     # CHproof: TP signs the concatenation of TPCH || APCH deterministically
     ch_concat = {"TPCH": tpch, "APCH": apch}

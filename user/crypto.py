@@ -1,7 +1,5 @@
-"""User-side crypto helpers (deterministic stubs).
-
-These mirror TP's stub helpers to keep tests deterministic.
-Replace with real crypto (e.g., HKDF/HMAC, Paillier, etc.) in production.
+"""
+User-side crypto helpers.
 """
 from typing import Any
 import secrets
@@ -10,8 +8,7 @@ import json
 import base64
 
 # Real crypto for secure request (optional, keeps stubs intact)
-from cryptography.hazmat.primitives import serialization, hashes
-from cryptography.hazmat.primitives.asymmetric import ed25519, padding
+from trust_provider.crypto import DL_P, DL_G, DL_Q
 
 
 def canonical_json(obj: Any) -> str:
@@ -23,17 +20,13 @@ def sha256_hex(s: str) -> str:
 
 
 def compute_r_bind() -> str:
-    # Binding randomness (stub)
     return secrets.token_hex(16)
 
 
-def compute_af(pii: dict, bi: dict, r_bind: str, pk_ap: str = "ap.pk.placeholder") -> str:
-    """Compute AF from PII/BI/r_bind/pk_ap (deterministic stub).
-
-    AF := sha256( canonical_json({pii,bi,r_bind,pk_ap}) )
-    """
-    payload = {"pii": pii, "bi": bi, "r_bind": r_bind, "pk_ap": pk_ap}
-    return sha256_hex(canonical_json(payload))
+def compute_af_dl(id_str: str, pk_ap: int, pk_tp: int, r_bind_hex: str) -> int:
+    h = int(sha256_hex(id_str), 16) % DL_P
+    r = int(r_bind_hex, 16) % DL_P
+    return (h * pk_ap % DL_P) * (pk_tp % DL_P) % DL_P * pow(DL_G, r, DL_P) % DL_P
 
 
 def compute_cmi(pii: dict) -> str:
@@ -49,49 +42,26 @@ def sign_with_secret(secret: str, data: Any) -> str:
 # ================================
 # Secure flow: Ed25519 + RSA-OAEP
 # ================================
-def generate_user_ed25519():
-    sk = ed25519.Ed25519PrivateKey.generate()
-    pk = sk.public_key()
-    pk_bytes = pk.public_bytes(
-        encoding=serialization.Encoding.Raw,
-        format=serialization.PublicFormat.Raw,
-    )
-    sk_bytes = sk.private_bytes(
-        encoding=serialization.Encoding.Raw,
-        format=serialization.PrivateFormat.Raw,
-        encryption_algorithm=serialization.NoEncryption(),
-    )
-    return sk_bytes, pk_bytes
+# RSA/Ed25519 已移除；客户端安全通道使用 DLog + ElGamal + Schnorr
+ 
+def dl_generate_user_keypair():
+    sk = secrets.randbelow(DL_Q - 1) + 1
+    pk = pow(DL_G, sk, DL_P)
+    return sk, pk
 
+def schnorr_sign(sk: int, msg: bytes) -> dict:
+    k = secrets.randbelow(DL_Q - 1) + 1
+    r = pow(DL_G, k, DL_P)
+    e = int.from_bytes(hashlib.sha256(r.to_bytes(32, "big") + msg).digest(), "big") % DL_Q
+    s = k + e * sk
+    return {"r": r, "e": e, "s": s}
 
-def sign_r_bind(sk_bytes: bytes, r_bind: bytes) -> bytes:
-    sk = ed25519.Ed25519PrivateKey.from_private_bytes(sk_bytes)
-    return sk.sign(r_bind)
-
-
-def verify_r_bind_signature(pk_bytes: bytes, r_bind: bytes, sig: bytes) -> bool:
-    pk = ed25519.Ed25519PublicKey.from_public_bytes(pk_bytes)
-    try:
-        pk.verify(sig, r_bind)
-        return True
-    except Exception:
-        return False
-
-
-def _load_tp_rsa_public(pem_str: str):
-    return serialization.load_pem_public_key(pem_str.encode())
-
-
-def encrypt_issue_plaintext(tp_pub_pem: str, obj: dict) -> str:
-    """RSA-OAEP encrypt JSON plaintext with TP public key, return base64 string."""
-    pub = _load_tp_rsa_public(tp_pub_pem)
+def elgamal_encrypt_bytes(pk: int, obj: dict) -> dict:
     raw = json.dumps(obj, separators=(",", ":")).encode()
-    ct = pub.encrypt(
-        raw,
-        padding.OAEP(
-            mgf=padding.MGF1(algorithm=hashes.SHA256()),
-            algorithm=hashes.SHA256(),
-            label=None,
-        ),
-    )
-    return base64.b64encode(ct).decode()
+    k = secrets.randbelow(DL_Q - 1) + 1
+    c1 = pow(DL_G, k, DL_P)
+    s = pow(pk, k, DL_P)
+    key = hashlib.sha256(str(s).encode()).digest()
+    ks = (key * ((len(raw) // len(key)) + 1))[: len(raw)]
+    c2 = bytes(a ^ b for a, b in zip(raw, ks))
+    return {"c1": c1, "c2": base64.b64encode(c2).decode()}

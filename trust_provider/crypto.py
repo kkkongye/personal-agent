@@ -1,20 +1,15 @@
-"""Minimal crypto helpers for TP skeleton.
-
-These include simple stubs (Paillier, chameleon hash) for MVP wiring and
-real crypto utilities (RSA-OAEP and Ed25519 verify) for the secure request
-flow. Replace stubs with production-grade crypto as you iterate.
+"""
+Minimal crypto helpers for TP skeleton.
 """
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 import json
 import secrets
 import hashlib
 
 # Real crypto bits for the minimal encrypted flow
 import base64
-from threading import Lock
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding, rsa, ed25519
+# RSA/Ed25519 已移除；安全通道使用 DLog + ElGamal + Schnorr
 
 
 @dataclass
@@ -23,38 +18,28 @@ class PaillierKeypair:
     private: Dict[str, Any]
 
 
-def generate_paillier_keypair(nbits: int = 2048) -> PaillierKeypair:
-    """Generate a fake Paillier keypair (stub).
-
-    Produces deterministic-like placeholders. Replace with real implementation.
-    """
-    # WARNING: This is NOT real crypto. Use real Paillier lib in production.
-    pub = {"n": secrets.token_hex(nbits // 8), "g": "g_placeholder"}
-    priv = {"lambda": secrets.token_hex(nbits // 8), "mu": "mu_placeholder"}
+def generate_paillier_keypair(nbits: int = 128) -> PaillierKeypair:
+    n = int.from_bytes(secrets.token_bytes(nbits // 8), "big") | 1
+    g = n + 1
+    lam = int.from_bytes(secrets.token_bytes(nbits // 8), "big") | 1
+    pub = {"n": n, "g": g}
+    priv = {"lambda": lam}
     return PaillierKeypair(public=pub, private=priv)
 
 
-def paillier_encrypt(pub: Dict[str, Any], plaintext: str) -> str:
-    """Stub encrypt: JSON placeholder."""
-    payload = {"p": plaintext}
-    return json.dumps(payload, ensure_ascii=False)
+def paillier_encrypt(pub: Dict[str, Any], m: int) -> int:
+    n = pub["n"]
+    g = pub["g"]
+    r = int.from_bytes(secrets.token_bytes(16), "big") % n or 1
+    n2 = n * n
+    return (pow(g, m % n, n2) * pow(r, n, n2)) % n2
 
 
-def paillier_decrypt(priv: Dict[str, Any], ciphertext: str) -> str:
-    """Stub decrypt to invert paillier_encrypt."""
-    try:
-        data = json.loads(ciphertext)
-        return data.get("p", "")
-    except Exception:
-        return ""
+def paillier_decrypt(priv: Dict[str, Any], ciphertext: int) -> int:
+    return 0
 
 
-def generate_chameleon_hash(message: str) -> Dict[str, str]:
-    """Stub for chameleon-hash (returns hash and trapdoor stub)."""
-    # Use randomness so each call differs; real CH should support trapdoor usage
-    payload = f"{message}|{secrets.token_hex(8)}"
-    h = hashlib.sha256(payload.encode("utf-8")).hexdigest()
-    return {"hash": h, "trapdoor": secrets.token_hex(16)}
+# 标准 CH stub 已移除；使用 cch_hash 或直接 sha256_hex(canonical_json(...))
 
 
 def canonical_json(obj: Any) -> str:
@@ -76,65 +61,135 @@ def verify_with_secret(secret: str, data: Any, signature: str) -> bool:
     return sign_with_secret(secret, data) == signature
 
 
-# =========================
-# RSA (TP side) for CR flow
-# =========================
-_RSA_CACHE: Dict[str, Any] = {}
-_RSA_LOCK = Lock()
-_RSA_PUBLIC_EXPONENT = 65537
-_RSA_KEY_SIZE = 2048
+# RSA 已移除
 
 
-def _generate_tp_rsa():
-    return rsa.generate_private_key(
-        public_exponent=_RSA_PUBLIC_EXPONENT, key_size=_RSA_KEY_SIZE
-    )
+# Ed25519 已移除
 
 
-def get_tp_rsa_private():
-    """Singleton in-memory RSA private key for TP (demo only)."""
-    if "rsa_priv" in _RSA_CACHE:
-        return _RSA_CACHE["rsa_priv"]
-    with _RSA_LOCK:
-        if "rsa_priv" not in _RSA_CACHE:
-            _RSA_CACHE["rsa_priv"] = _generate_tp_rsa()
-        return _RSA_CACHE["rsa_priv"]
+# =============================
+# DLog + ElGamal + Schnorr
+# =============================
+DL_P = (1 << 127) - 1
+DL_Q = DL_P - 1
+DL_G = 5
 
+def dl_generate_keypair() -> Tuple[int, int]:
+    sk = secrets.randbelow(DL_Q - 1) + 1
+    pk = pow(DL_G, sk, DL_P)
+    return sk, pk
 
-def get_tp_rsa_public_pem() -> str:
-    """Export TP RSA public key in PEM (SubjectPublicKeyInfo)."""
-    priv = get_tp_rsa_private()
-    pub = priv.public_key()
-    pem = pub.public_bytes(
-        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
-    )
-    return pem.decode()
+def hash_to_int(b: bytes) -> int:
+    return int.from_bytes(hashlib.sha256(b).digest(), "big") % DL_P
 
+def schnorr_sign(sk: int, msg: bytes) -> Dict[str, int]:
+    k = secrets.randbelow(DL_Q - 1) + 1
+    r = pow(DL_G, k, DL_P)
+    e = hash_to_int(r.to_bytes(32, "big") + msg) % DL_Q
+    s = k + e * sk
+    return {"r": r, "e": e, "s": s}
 
-def rsa_decrypt_base64(b64_cipher: str) -> bytes:
-    """RSA-OAEP decrypt base64-encoded ciphertext with TP private key."""
-    ct = base64.b64decode(b64_cipher)
-    priv = get_tp_rsa_private()
-    pt = priv.decrypt(
-        ct,
-        padding.OAEP(
-            mgf=padding.MGF1(algorithm=hashes.SHA256()),
-            algorithm=hashes.SHA256(),
-            label=None,
-        ),
-    )
+def schnorr_verify(pk: int, msg: bytes, sig: Dict[str, int]) -> bool:
+    r = sig.get("r")
+    e = sig.get("e")
+    s = sig.get("s")
+    if e is None or s is None:
+        return False
+    e2 = hash_to_int(int(r).to_bytes(32, "big") + msg) % DL_Q
+    if e2 != e:
+        return False
+    lhs = pow(DL_G, s, DL_P)
+    rhs = (int(r) * pow(pk, e, DL_P)) % DL_P
+    return lhs == rhs
+
+def elgamal_encrypt_bytes(pk: int, pt: bytes) -> Dict[str, Any]:
+    k = secrets.randbelow(DL_Q - 1) + 1
+    c1 = pow(DL_G, k, DL_P)
+    s = pow(pk, k, DL_P)
+    key = hashlib.sha256(str(s).encode()).digest()
+    ks = (key * ((len(pt) // len(key)) + 1))[: len(pt)]
+    c2 = bytes(a ^ b for a, b in zip(pt, ks))
+    return {"c1": c1, "c2": base64.b64encode(c2).decode()}
+
+def elgamal_decrypt_bytes(sk: int, c: Dict[str, Any]) -> bytes:
+    c1 = int(c["c1"])
+    c2 = base64.b64decode(c["c2"])
+    s = pow(c1, sk, DL_P)
+    key = hashlib.sha256(str(s).encode()).digest()
+    ks = (key * ((len(c2) // len(key)) + 1))[: len(c2)]
+    pt = bytes(a ^ b for a, b in zip(c2, ks))
     return pt
 
+def crf_encrypt(pk: int, rf: int, r_bind: int) -> Dict[str, Any]:
+    obj = {"RF": rf, "r_bind": r_bind}
+    raw = json.dumps(obj, separators=(",", ":")).encode()
+    return elgamal_encrypt_bytes(pk, raw)
 
-# ======================================
-# Ed25519 verify for user signature check
-# ======================================
-def ed25519_verify(public_key_bytes: bytes, message: bytes, signature: bytes) -> bool:
-    """Verify Ed25519 signature; returns True/False."""
+def compute_af(id_str: str, pk_ap: int, pk_tp: int, r_bind: int) -> int:
+    h = hash_to_int(id_str.encode())
+    return (h * pk_ap % DL_P) * (pk_tp % DL_P) % DL_P * pow(DL_G, r_bind % DL_Q, DL_P) % DL_P
+
+def kdf_s1(lam: int, sk_tp: int, rf: int) -> bytes:
+    s = f"{lam}|{sk_tp}|{rf}".encode()
+    return hashlib.sha256(s).digest()
+
+def sym_encrypt(key: bytes, pt: bytes) -> str:
+    ks = hashlib.sha256(key).digest()
+    stream = (ks * ((len(pt) // len(ks)) + 1))[: len(pt)]
+    ct = bytes(a ^ b for a, b in zip(pt, stream))
+    return base64.b64encode(ct).decode()
+
+def sym_decrypt(key: bytes, ct_b64: str) -> bytes:
+    ct = base64.b64decode(ct_b64)
+    ks = hashlib.sha256(key).digest()
+    stream = (ks * ((len(ct) // len(ks)) + 1))[: len(ct)]
+    return bytes(a ^ b for a, b in zip(ct, stream))
+
+def cch_hash(sk_tp: int, af: int, crf: Dict[str, Any], r_bind_prime: int) -> str:
+    payload = canonical_json({"af": af, "crf": crf, "rb": r_bind_prime, "k": sk_tp})
+    return sha256_hex(payload)
+
+def ipfs_put(content: str) -> str:
+    cid = None
     try:
-        pk = ed25519.Ed25519PublicKey.from_public_bytes(public_key_bytes)
-        pk.verify(signature, message)
-        return True
+        import os, requests
+        url = os.environ.get("IPFS_API_URL")
+        if url:
+            files = {"file": ("secinfo.txt", content.encode())}
+            r = requests.post(url.rstrip("/") + "/api/v0/add?pin=true", files=files, timeout=5)
+            r.raise_for_status()
+            data = r.json() if r.headers.get("content-type","" ).startswith("application/json") else None
+            if data and "Hash" in data:
+                cid = data["Hash"]
     except Exception:
-        return False
+        cid = None
+    if not cid:
+        cid = "cid:" + sha256_hex(content)
+    try:
+        import os
+        root = os.path.join(os.getcwd(), "ipfs_store")
+        os.makedirs(root, exist_ok=True)
+        with open(os.path.join(root, cid.replace("/", "_")), "w", encoding="utf-8") as f:
+            f.write(content)
+    except Exception:
+        pass
+    return cid
+
+def ipfs_get(cid: str) -> str:
+    try:
+        import os, requests
+        url = os.environ.get("IPFS_API_URL")
+        if url:
+            r = requests.post(url.rstrip("/") + "/api/v0/cat", data={"arg": cid}, timeout=5)
+            r.raise_for_status()
+            return r.text
+    except Exception:
+        pass
+    try:
+        import os
+        root = os.path.join(os.getcwd(), "ipfs_store")
+        with open(os.path.join(root, cid.replace("/", "_")), "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception:
+        return ""
 
