@@ -148,7 +148,12 @@ def issue_phc(aso: ASOCompleteModel) -> Dict[str, Any]:
 
 @router.get("/tp/public_keys")
 def get_public_keys() -> Dict[str, Any]:
-    return {"tp_dlog_pk": TP_DL_PK, "ap_dlog_pk": AP_DL_PK, "dl_params": {"p": DL_P, "g": 5}, "paillier_pub": TP_PAILLIER.public}
+    return {
+        "tp_dlog_pk": str(TP_DL_PK),
+        "ap_dlog_pk": str(AP_DL_PK),
+        "dl_params": {"p": str(DL_P), "g": str(5)},
+        "paillier_pub": {"n": str(TP_PAILLIER.public.get("n")), "g": str(TP_PAILLIER.public.get("g"))},
+    }
 
 
 @router.post("/tp/issue_phc_secure")

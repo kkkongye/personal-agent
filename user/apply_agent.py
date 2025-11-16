@@ -33,8 +33,8 @@ def request_phc_secure(base_url: str, user: UserInfo) -> PHCResponse:
     pub_resp = httpx.get(base_url.rstrip("/") + "/v1/tp/public_keys", timeout=10.0)
     pub_resp.raise_for_status()
     tp_keys = pub_resp.json()
-    tp_dlog_pk = tp_keys["tp_dlog_pk"]
-    ap_dlog_pk = tp_keys["ap_dlog_pk"]
+    tp_dlog_pk = int(str(tp_keys["tp_dlog_pk"]))
+    ap_dlog_pk = int(str(tp_keys["ap_dlog_pk"]))
     sk_a, pk_a = dl_generate_user_keypair()
     r_bind_int = int(secrets.token_hex(16), 16)
     af_val = compute_af_dl(user.pii.id_number, ap_dlog_pk, tp_dlog_pk, hex(r_bind_int)[2:])
@@ -53,7 +53,7 @@ def request_pa_remote(base_url: str, phc: Dict[str, Any], user: UserInfo) -> Dic
     pub_resp = httpx.get(base_url.rstrip("/") + "/v1/ap/public_keys", timeout=10.0)
     pub_resp.raise_for_status()
     ap_keys = pub_resp.json()
-    ap_dlog_pk = ap_keys["ap_dlog_pk"]
+    ap_dlog_pk = int(str(ap_keys["ap_dlog_pk"]))
     sk_a, pk_a = dl_generate_user_keypair()
     hid = sha256_hex(user.pii.id_number)
     tpac = phc.get("TPA") if isinstance(phc, dict) else {}
@@ -67,6 +67,44 @@ def request_pa_remote(base_url: str, phc: Dict[str, Any], user: UserInfo) -> Dic
     par = data.get("par")
     raw = _elg_decrypt(sk_a, par)
     return json.loads(raw.decode())
+
+
+def request_cmm_init(base_url: str, phc: Dict[str, Any], user: UserInfo) -> Dict[str, Any]:
+    try:
+        pub_resp = httpx.get(base_url.rstrip("/") + "/v1/ap/public_keys", timeout=10.0)
+        pub_resp.raise_for_status()
+        ap_keys = pub_resp.json()
+        ap_dlog_pk = int(str(ap_keys["ap_dlog_pk"]))
+    except httpx.HTTPError:
+        from agent_provider.ap import AP_PK as ap_dlog_pk
+    sk_a, pk_a = dl_generate_user_keypair()
+    hid = sha256_hex(user.pii.id_number)
+    tpac = phc.get("TPA") if isinstance(phc, dict) else {}
+    ar_plain = {"PHC": phc, "HID": hid, "TPAC": tpac}
+    ar = elgamal_encrypt_bytes(ap_dlog_pk, ar_plain)
+    payload = {"ar": ar, "user_pub": pk_a}
+    url = base_url.rstrip("/") + "/v1/ap/cmm_init"
+    resp = httpx.post(url, json=payload, timeout=15.0)
+    resp.raise_for_status()
+    data = resp.json()
+    cmm_enc = data.get("cmm_enc")
+    raw = _elg_decrypt(sk_a, cmm_enc)
+    return {"cmm": json.loads(raw.decode()).get("CMM"), "sk": str(sk_a), "pk": str(pk_a)}
+
+
+def request_cmm_submit(base_url: str, cmc: list, hid: str, phc: Dict[str, Any], user_pub: int) -> Dict[str, Any]:
+    try:
+        pub_resp = httpx.get(base_url.rstrip("/") + "/v1/ap/public_keys", timeout=10.0)
+        pub_resp.raise_for_status()
+        ap_dlog_pk = pub_resp.json()["ap_dlog_pk"]
+    except httpx.HTTPError:
+        from agent_provider.ap import AP_PK as ap_dlog_pk
+    obj = {"CMC": cmc, "HID": hid, "PHC": phc}
+    cmc_enc = elgamal_encrypt_bytes(ap_dlog_pk, obj)
+    url = base_url.rstrip("/") + "/v1/ap/cmm_submit"
+    resp = httpx.post(url, json={"cmc_enc": cmc_enc, "user_pub": user_pub}, timeout=15.0)
+    resp.raise_for_status()
+    return resp.json()
 
 
 def _elg_decrypt(sk: int, c: Dict[str, Any]) -> bytes:
