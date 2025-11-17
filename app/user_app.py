@@ -35,8 +35,11 @@ class RequestCMMSubmit(BaseModel):
     phc: Dict[str, Any]
     user_sk: str
     user_pk: str
-    user_sk: int | str
-    user_pk: int | str
+
+class RequestCreateAgent(BaseModel):
+    phc: Dict[str, Any]
+    pa: Dict[str, Any]
+    cmc: list
 
 @app.post('/user/request_phc')
 def user_request_phc(req: RequestPHC) -> Dict[str, Any]:
@@ -152,6 +155,45 @@ def user_cmm_submit(req: RequestCMMSubmit) -> Dict[str, Any]:
         obj["memory_path"] = None
     return obj
 
+@app.post('/user/create_agent')
+def user_create_agent(req: RequestCreateAgent) -> Dict[str, Any]:
+    try:
+        import os, json, time
+        phc = req.phc or {}
+        pa = req.pa or {}
+        cmc = req.cmc or []
+        phc_id = (phc.get("id") or "phc").replace(":", "_")
+        did = ((phc.get("ASO") or {}).get("TPM") or {}).get("CDID")
+        manifest = {
+            "id": phc_id,
+            "did": did,
+            "modules": {
+                "inputs": [m.get("label") for m in (cmc[0] if len(cmc)>0 else [])],
+                "reasoning": [m.get("label") for m in (cmc[1] if len(cmc)>1 else [])],
+                "knowledge": [m.get("label") for m in (cmc[2] if len(cmc)>2 else [])],
+                "data_access": [m.get("label") for m in (cmc[3] if len(cmc)>3 else [])],
+                "outputs": [m.get("label") for m in (cmc[4] if len(cmc)>4 else [])],
+            },
+            "binding": {
+                "PHC_id": phc.get("id"),
+                "SCID": phc.get("SCID"),
+                "APid": ((pa.get("APA") or {}).get("APid")),
+            },
+            "proof": {
+                "APA": (pa.get("APA") or {}).get("APproof"),
+                "APCH": ((phc.get("PROOF") or {}).get("APCH")),
+                "APCH_r": ((phc.get("PROOF") or {}).get("APCH_r")),
+            },
+        }
+        root = os.path.join(os.getcwd(), "local_store", "agents", phc_id)
+        os.makedirs(root, exist_ok=True)
+        path = os.path.join(root, f"agent_manifest_{int(time.time())}.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2)
+        return {"success": True, "agent_path": path, "manifest": manifest}
+    except Exception:
+        return {"success": False}
+
 @app.get('/user')
 def ui() -> Response:
     html = """
@@ -174,11 +216,13 @@ def ui() -> Response:
     <pre id=phc></pre>
     <button id=fetchcmm disabled>Fetch CMM</button>
     <div id=cmm_ui></div>
-    <button id=submitcmc disabled>Submit CMC</button>
+    <button id=submitcmc disabled>Submit CMM</button>
     <pre id=pa_cmm></pre>
     <pre id=hash_ch></pre>
     <pre id=hash_cch></pre>
     <pre id=hash_status></pre>
+    <button id=createAgent disabled>Create Personal Agent</button>
+    <pre id=agent_out></pre>
     <button id=reqpa disabled>Request PA</button>
     <pre id=pa_remote></pre>
 
@@ -238,6 +282,16 @@ def ui() -> Response:
       hashCH.textContent = 'CH: ' + String(data.CH || '');
       hashCCH.textContent = 'CCH: ' + String(data.CCH || '');
       hashStatus.textContent = 'verified_ch: ' + String(data.verified_ch_user || false) + ', verified_cch: ' + String(data.verified_cch_user || false);
+      window.__PHC = data.PHC; window.__PA = data.PA;
+      const createBtn = document.getElementById('createAgent');
+      if(createBtn){
+        createBtn.disabled = !(window.__PHC && window.__PA);
+        createBtn.onclick = async ()=>{
+          const payload2 = { phc: window.__PHC||{}, pa: window.__PA||{}, cmc: cmcObj||[] };
+          const r2=await fetch('/user/create_agent',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload2)});
+          const data2=await r2.json(); const out = document.getElementById('agent_out'); if(out) out.textContent=JSON.stringify(data2,null,2);
+        };
+      }
         };
         
         document.getElementById('reqpa').onclick = async ()=>{
