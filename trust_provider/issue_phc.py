@@ -25,8 +25,10 @@ from crypto_lib import (
     paillier_decrypt,
     paillier_encrypt,
     sign_with_secret,
+    canonical_json,
     dl_generate_keypair,
     elgamal_decrypt_bytes,
+    schnorr_sign,
     schnorr_verify,
     compute_af,
     kdf_s1,
@@ -135,18 +137,18 @@ def issue_phc(aso: ASOCompleteModel) -> Dict[str, Any]:
 
     # 2) TPA: use TP public key as TPid
     tpid = str(TP_DL_PK)
-    tpproof = sign_with_secret(TP_PAILLIER.private["lambda"], {"TPM": tpm, "TPid": tpid})
-    tpa = {"TPid": tpid, "TPproof": tpproof}
+    from crypto_lib import schnorr_sign
+    tpproof_sig = schnorr_sign(TP_DL_SK, canonical_json({"TPM": tpm, "TPid": tpid}).encode())
+    tpa = {"TPid": tpid, "TPproof": {"r": str(tpproof_sig["r"]), "e": str(tpproof_sig["e"]), "s": str(tpproof_sig["s"])}}
 
     # 3) APA: use AP public key as APid
     apid = str(AP_DL_PK)
-    ap_secret = "ap_secret_placeholder"
-    approof = sign_with_secret(ap_secret, {"APM": apm, "APid": apid})
-    apa = {"APid": apid, "APproof": approof}
+    approof_sig = schnorr_sign(AP_DL_SK, canonical_json({"APM": apm, "APid": apid}).encode())
+    apa = {"APid": apid, "APproof": {"r": str(approof_sig["r"]), "e": str(approof_sig["e"]), "s": str(approof_sig["s"])}}
 
     # 4) Build PHC with PROOF fields (use formal CH for TPCH/APCH)
     # Attach SCID when available (legacy path uses RF=0)
-    phc = build_phc(aso=aso_built, tpa=tpa, apa=apa, tp_secret=TP_PAILLIER.private["lambda"], tp_pk=TP_DL_PK, ap_pk=AP_DL_PK)
+    phc = build_phc(aso=aso_built, tpa=tpa, apa=apa, tp_sk=TP_DL_SK, tp_pk=TP_DL_PK, ap_pk=AP_DL_PK)
     phc.setdefault("SCID", {"AF": tpm.get("AF"), "RF": scid_rf})
 
     return {"success": True, "phc": phc}
@@ -189,14 +191,27 @@ def issue_phc_secure(payload: SecureInbound) -> Dict[str, Any]:
     crf = crf_encrypt(TP_DL_PK, rf, rb)
     scid = {"AF": af_recv, "RF": rf}
     did = f"did:wba:{hashlib.sha256(json.dumps(scid, separators=(",", ":")).encode()).hexdigest()}:example"
-    rtp = secrets.randbelow(DL_P - 2) + 1
+
+    # Build JSON-LD PHC per spec with initial APM/APA and formal PROOF
+    tpm = {"Time": datetime.utcnow().isoformat() + "Z", "CDID": did, "AF": af_recv, "ECID": "g"}
+    apm = {"Time": datetime.utcnow().isoformat() + "Z", "CMI": "0"}
+    tpid = str(TP_DL_PK)
+    apid = str(AP_DL_PK)
+    tpproof_sig = schnorr_sign(TP_DL_SK, canonical_json({"TPM": tpm, "TPid": tpid}).encode())
+    approof_sig = schnorr_sign(AP_DL_SK, canonical_json({"APM": apm, "APid": apid}).encode())
+    tpa = {"TPid": tpid, "TPproof": {"r": str(tpproof_sig["r"]), "e": str(tpproof_sig["e"]), "s": str(tpproof_sig["s"])}}
+    apa = {"APid": apid, "APproof": {"r": str(approof_sig["r"]), "e": str(approof_sig["e"]), "s": str(approof_sig["s"])}}
+    phc = build_phc(aso={"TPM": tpm, "APM": apm}, tpa=tpa, apa=apa, tp_sk=TP_DL_SK, tp_pk=TP_DL_PK, ap_pk=AP_DL_PK)
+    phc["SCID"] = scid
+    phc["DID"] = did
+    # Store secured info
     s1 = kdf_s1(TP_PAILLIER.private["lambda"], TP_DL_SK, rf)
-    secinfo_obj = {"BI": bi, "PII": pii, "DID": did, "r_bind": rb, "r_tp": rtp}
+    secinfo_obj = {"BI": bi, "PII": pii, "DID": did, "r_bind": rb}
     secinfo = sym_encrypt(s1, json.dumps(secinfo_obj, separators=(",", ":")).encode())
     cid = ipfs_put(secinfo)
-    cch = cch_hash(TP_DL_SK, af_recv, crf, rtp)
-    ecid = paillier_encrypt(TP_PAILLIER.public, int(hashlib.sha256((cid + str(rf)).encode()).hexdigest(), 16))
-    return {"success": True, "phc": {"SCID": scid, "DID": did, "CID": cid, "ECID": ecid, "CCH": cch, "CRF": crf, "Secinfo": secinfo}, "mode": "secure_dl"}
+    phc["CID"] = cid
+    phc["CRF"] = crf
+    return {"success": True, "phc": phc, "mode": "secure_phc_jsonld"}
 
 
 @router.post("/tp/verify_phc")

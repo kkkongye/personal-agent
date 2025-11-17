@@ -56,6 +56,23 @@ def dl_generate_keypair() -> Tuple[int, int]:
 def hash_to_int(b: bytes) -> int:
     return int.from_bytes(hashlib.sha256(b).digest(), "big") % DL_P
 
+def inv_mod(a: int, m: int) -> int:
+    a = a % m
+    if a == 0:
+        raise ZeroDivisionError("inverse of zero")
+    # Extended Euclidean Algorithm
+    t, new_t = 0, 1
+    r, new_r = m, a
+    while new_r != 0:
+        q = r // new_r
+        t, new_t = new_t, t - q * new_t
+        r, new_r = new_r, r - q * new_r
+    if r > 1:
+        raise ValueError("a is not invertible")
+    if t < 0:
+        t += m
+    return t
+
 def schnorr_sign(sk: int, msg: bytes) -> Dict[str, int]:
     k = secrets.randbelow(DL_Q - 1) + 1
     r = pow(DL_G, k, DL_P)

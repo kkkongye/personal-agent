@@ -15,9 +15,9 @@ import secrets
 from crypto_lib import (
     canonical_json,
     sha256_hex,
-    sign_with_secret,
-    verify_with_secret,
     ch_compute,
+    schnorr_sign,
+    schnorr_verify,
     DL_Q,
 )
 
@@ -26,7 +26,7 @@ def build_phc(
     aso: Dict[str, Any],
     tpa: Dict[str, Any],
     apa: Dict[str, Any],
-    tp_secret: str,
+    tp_sk: int,
     tp_pk: int,
     ap_pk: int,
 ) -> Dict[str, Any]:
@@ -58,18 +58,19 @@ def build_phc(
     tpch = str(ch_compute(tp_pk, tpm_tpa, {}, r_tp))
     apch = str(ch_compute(ap_pk, apm_apa, {}, r_ap))
 
-    # CHproof: TP signs the concatenation of TPCH || APCH deterministically
-    ch_concat = {"TPCH": tpch, "APCH": apch}
-    ch_proof = sign_with_secret(tp_secret, ch_concat)
+    # CHproof: Schnorr over canonical({TPCH,APCH}) with TP secret
+    ch_concat = canonical_json({"TPCH": tpch, "APCH": apch}).encode()
+    ch_sig = schnorr_sign(tp_sk, ch_concat)
 
     phc["PROOF"] = {
         "TPCH": tpch,
         "APCH": apch,
-        "CHproof": ch_proof,
+        "APCH_r": str(r_ap),
+        "CHproof": {"r": str(ch_sig["r"]), "e": str(ch_sig["e"]), "s": str(ch_sig["s"])},
         "VM": {
-            "TPproof": "Sign_tp(ASO.TPM, TPA.TPid)",
-            "APproof": "Sign_ap(ASO.APM, APA.APid)",
-            "CHproof": "Sign_tp(TPCH||APCH)",
+            "TPproof": "Schnorr(ASO.TPM, TPA.TPid)",
+            "APproof": "Schnorr(ASO.APM, APA.APid)",
+            "CHproof": "Schnorr(TPCH||APCH)",
         },
     }
 
@@ -117,17 +118,21 @@ def verify_phc(phc: Dict[str, Any], tp_secret: str | None = None) -> bool:
             if k not in proof:
                 return False
 
-        # Optional deterministic checks
-        if tp_secret:
-            # CHproof consistency
-            expected_ch = sign_with_secret(tp_secret, {"TPCH": proof["TPCH"], "APCH": proof["APCH"]})
-            if expected_ch != proof.get("CHproof"):
+        # Public verification (Schnorr)
+        try:
+            tp_pk = int(str(tpa["TPid"]))
+            ap_pk = int(str(apa["APid"]))
+            tp_sig = tpa["TPproof"]
+            ap_sig = apa["APproof"]
+            ch_sig = proof["CHproof"]
+            if not (schnorr_verify(tp_pk, canonical_json({"TPM": tpm, "TPid": tpa["TPid"]}).encode(), {"r": int(tp_sig["r"]), "e": int(tp_sig["e"]), "s": int(tp_sig["s"])}) ):
                 return False
-
-            # TPproof best-effort: sign over (ASO.TPM, TPid)
-            expected_tp_proof = sign_with_secret(tp_secret, {"TPM": tpm, "TPid": tpa["TPid"]})
-            if expected_tp_proof != tpa.get("TPproof"):
+            if not (schnorr_verify(ap_pk, canonical_json({"APM": apm, "APid": apa["APid"]}).encode(), {"r": int(ap_sig["r"]), "e": int(ap_sig["e"]), "s": int(ap_sig["s"])}) ):
                 return False
+            if not (schnorr_verify(tp_pk, canonical_json({"TPCH": proof["TPCH"], "APCH": proof["APCH"]}).encode(), {"r": int(ch_sig["r"]), "e": int(ch_sig["e"]), "s": int(ch_sig["s"])}) ):
+                return False
+        except Exception:
+            return False
 
         return True
     except Exception:

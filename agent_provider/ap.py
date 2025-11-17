@@ -11,6 +11,8 @@ from crypto_lib import (
     sha256_hex,
     DL_P,
     DL_Q,
+    hash_to_int,
+    inv_mod,
 )
 from trust_provider.issue_phc import TP_PAILLIER, TP_DL_PK
 from crypto_lib import compute_af_formal, hcgen_cmi, ch_compute, cch_compute
@@ -52,8 +54,8 @@ def request_pa(payload: APInbound) -> Dict[str, Any]:
     cmi_prime = sha256_hex(canonical_json({"cmc": cmc_list, "hid": hid}))
 
     apm_prime = {"CMI": cmi_prime, "Time": datetime.utcnow().isoformat() + "Z"}
-    apid = "ap.example"
-    sig = schnorr_sign(AP_SK, canonical_json(apm_prime).encode())
+    apid = str(AP_PK)
+    sig = schnorr_sign(AP_SK, canonical_json({"APM": apm_prime, "APid": apid}).encode())
     apa = {"APid": apid, "APproof": {"r": str(sig["r"]), "e": str(sig["e"]), "s": str(sig["s"])}}
     pa = {"APM": apm_prime, "APA": apa}
 
@@ -151,10 +153,38 @@ def cmm_submit(payload: CMMSubmitRequest) -> Dict[str, Any]:
     af_calc = compute_af_formal(str(hid), AP_PK, TP_DL_PK, cmi_int % DL_Q, crf_int, rb2)
     verified_af = (str(af_prev) == str(af_calc))
     cch_val = cch_compute(AP_PK, TP_DL_PK, cmi_int, crf_int, rb2)
+    # Merge APM'/APA into PHC using CH trapdoor to keep APCH unchanged
+    try:
+        phc_mod = json.loads(json.dumps(phc))
+        old_apm = ((phc_mod.get("ASO") or {}).get("APM") or {})
+        old_apa = phc_mod.get("APA") or {}
+        proof = phc_mod.setdefault("PROOF", {})
+        apch_old = str(proof.get("APCH"))
+        r_ap_old = int(str(proof.get("APCH_r") or 0)) % DL_Q
+        # h values
+        h_old = hash_to_int(canonical_json({"APM": old_apm, "APA": old_apa}).encode()) % DL_Q
+        h_new = hash_to_int(canonical_json({"APM": apm_prime, "APA": apa}).encode()) % DL_Q
+        inv_x = inv_mod(AP_SK, DL_Q)
+        r_ap_new = (r_ap_old + (h_old - h_new) * inv_x) % DL_Q
+        # verify trapdoor update keeps APCH
+        apch_try = str(ch_compute(AP_PK, apm_prime, apa, r_ap_new))
+        if apch_old and apch_try == apch_old:
+            phc_mod.setdefault("ASO", {}).update({"APM": apm_prime})
+            phc_mod["APA"] = apa
+            proof["APCH_r"] = str(r_ap_new)
+        else:
+            # fallback: update APCH directly (will need TP re-sign)
+            phc_mod.setdefault("ASO", {}).update({"APM": apm_prime})
+            phc_mod["APA"] = apa
+            proof["APCH"] = apch_try
+            proof["needs_tp_resign"] = True
+    except Exception:
+        phc_mod = phc
     par_obj = {
         "r_bind2": str(rb2),
         "r_ap": str(r_ap),
-        "PHC": phc,
+        "PHC": phc_mod,
+        "PHC_original": phc,
         "PA": pa,
         "CH": str(ch_val),
         "CCH": str(cch_val),
@@ -171,19 +201,47 @@ def cmm_submit(payload: CMMSubmitRequest) -> Dict[str, Any]:
 
 
 def _build_cmm_matrix(hid: str, phc: Dict[str, Any]) -> List[List[Dict[str, Any]]]:
-    # Simple demo CMM matrix: rows = categories; cols = implementations
     return [
         [
-            {"id": "notif_email", "label": "Email 通知", "params": {"sender": "noreply@example.com"}},
-            {"id": "notif_sms", "label": "SMS 通知", "params": {"provider": "twilio"}},
-            {"id": "notif_push", "label": "Push 通知", "params": {"provider": "onesignal"}},
+            {"id": "input_text", "label": "text", "params": {}},
+            {"id": "input_voice", "label": "voice", "params": {}},
+            {"id": "input_image", "label": "image", "params": {}},
+            {"id": "input_video", "label": "video", "params": {}},
+            {"id": "input_sensor", "label": "sensor", "params": {}},
+            {"id": "input_system_event", "label": "system-event", "params": {}},
         ],
         [
-            {"id": "store_ipfs", "label": "IPFS 存证", "params": {"pin": True}},
-            {"id": "store_local", "label": "本地存储", "params": {"path": "./storage"}},
+            {"id": "reason_rule_engine", "label": "rule-engine", "params": {}},
+            {"id": "reason_bayesian_net", "label": "bayesian-net", "params": {}},
+            {"id": "reason_fuzzy_logic", "label": "fuzzy-logic", "params": {}},
+            {"id": "reason_llm", "label": "llm", "params": {}},
+            {"id": "reason_retrieval", "label": "retrieval", "params": {}},
+            {"id": "reason_neural_network", "label": "neural-network", "params": {}},
+            {"id": "reason_planner", "label": "planner", "params": {}},
+            {"id": "reason_safety_filter", "label": "safety-filter", "params": {}},
         ],
         [
-            {"id": "privacy_basic", "label": "基础隐私", "params": {"mask_fields": ["email"]}},
-            {"id": "privacy_strict", "label": "严格隐私", "params": {"mask_fields": ["email", "id_card_number"]}},
+            {"id": "knowledge_local_memory", "label": "local-memory", "params": {}},
+            {"id": "knowledge_long_term_memory", "label": "long-term-memory", "params": {}},
+            {"id": "knowledge_vector_index", "label": "vector-index", "params": {}},
+            {"id": "knowledge_base", "label": "knowledge-base", "params": {}},
+            {"id": "knowledge_shared_org_data", "label": "shared-org-data", "params": {}},
+        ],
+        [
+            {"id": "data_browser", "label": "browser", "params": {}},
+            {"id": "data_external_api", "label": "external-api", "params": {}},
+            {"id": "data_database", "label": "database", "params": {}},
+            {"id": "data_blockchain", "label": "blockchain", "params": {}},
+            {"id": "data_ipfs", "label": "ipfs", "params": {}},
+            {"id": "data_iot_device", "label": "iot-device", "params": {}},
+            {"id": "data_cloud_storage", "label": "cloud-storage", "params": {}},
+        ],
+        [
+            {"id": "output_text", "label": "text", "params": {}},
+            {"id": "output_speech", "label": "speech", "params": {}},
+            {"id": "output_image", "label": "image", "params": {}},
+            {"id": "output_notification", "label": "notification", "params": {}},
+            {"id": "output_json_api", "label": "json-api", "params": {}},
+            {"id": "output_actuation", "label": "actuation", "params": {}},
         ],
     ]
