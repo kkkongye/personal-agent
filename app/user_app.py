@@ -139,6 +139,17 @@ def user_cmm_submit(req: RequestCMMSubmit) -> Dict[str, Any]:
     obj["verified_ch_user"] = verified_ch
     obj["verified_cch_user"] = verified_cch
     obj["memory_enc"] = memory_enc
+    try:
+        import os, time, json as _json
+        store_dir = os.path.join(os.getcwd(), "local_store", "pa_memory")
+        os.makedirs(store_dir, exist_ok=True)
+        phc_id = ((obj.get("PHC") or {}).get("id") or "phc").replace(":", "_")
+        fname = f"{phc_id}_{int(time.time())}.json"
+        full_path = os.path.join(store_dir, fname)
+        _json.dump({"memory_enc": memory_enc, "meta": {"phc_id": phc_id, "hid": req.hid, "timestamp": int(time.time())}}, open(full_path, "w", encoding="utf-8"), ensure_ascii=False)
+        obj["memory_path"] = full_path
+    except Exception:
+        obj["memory_path"] = None
     return obj
 
 @app.get('/user')
