@@ -3,6 +3,8 @@ from pydantic import BaseModel
 from typing import Any, Dict
 from user.models import UserInfo, PIIModel, BIModel
 from user.apply_agent import request_phc_remote, request_pa_remote, request_cmm_init, request_cmm_submit
+from user.apply_agent import request_phc_secure
+from user.apply_agent import request_pa_recover
 from trust_provider.crypto import elgamal_decrypt_bytes
 from user.crypto import canonical_json, sha256_hex
 from trust_provider.crypto import compute_af_formal, hcgen_cmi, ch_compute, cch_compute
@@ -41,12 +43,17 @@ class RequestCreateAgent(BaseModel):
     pa: Dict[str, Any]
     cmc: list
 
+class RequestPARecover(BaseModel):
+    base_url: str
+    phc: Dict[str, Any]
+    user: UserInfo
+
 @app.post('/user/request_phc')
 def user_request_phc(req: RequestPHC) -> Dict[str, Any]:
     try:
-        res = request_phc_remote(req.base_url, req.user)
+        res = request_phc_secure(req.base_url, req.user)
         return res.model_dump()
-    except httpx.HTTPError:
+    except Exception:
         r_bind = compute_r_bind()
         af = sha256_hex(canonical_json({"pii": req.user.pii.model_dump(), "bi": req.user.bi.model_dump(), "r_bind": r_bind, "pk_ap": "ap.pk.placeholder"}))
         cmi = compute_cmi(req.user.pii.model_dump())
@@ -126,8 +133,14 @@ def user_cmm_submit(req: RequestCMMSubmit) -> Dict[str, Any]:
         r_ap_val = 0
     ch_calc = ch_compute(ap_pk_int, (obj.get("PA") or {}).get("APM") or {}, (obj.get("PA") or {}).get("APA") or {}, r_ap_val)
     cch_calc = cch_compute(ap_pk_int, tp_pk_int, cmi_int, crf_int, rbind2_int)
-    verified_ch = (str(ch_calc) == str(obj.get("CH")))
-    verified_cch = (str(cch_calc) == str(obj.get("CCH")))
+    try:
+        verified_ch = (int(str(ch_calc)) == int(str(obj.get("CH") or 0)))
+    except Exception:
+        verified_ch = False
+    try:
+        verified_cch = (int(str(cch_calc)) == int(str(obj.get("CCH") or 0)))
+    except Exception:
+        verified_cch = False
     # Build PA.MEMORY and encrypt with user's public key (ElGamal)
     from user.crypto import elgamal_encrypt_bytes as user_elg_enc
     memory_payload = {
@@ -194,6 +207,13 @@ def user_create_agent(req: RequestCreateAgent) -> Dict[str, Any]:
     except Exception:
         return {"success": False}
 
+@app.post('/user/recover_pa')
+def user_recover_pa(req: RequestPARecover) -> Dict[str, Any]:
+    try:
+        return request_pa_recover(req.base_url, req.phc, req.user)
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 @app.get('/user')
 def ui() -> Response:
     html = """
@@ -221,6 +241,8 @@ def ui() -> Response:
     <pre id=hash_ch></pre>
     <pre id=hash_cch></pre>
     <pre id=hash_status></pre>
+    <button id=recoverpa disabled>Recover PA</button>
+    <pre id=pa_recover></pre>
     <button id=createAgent disabled>Create Personal Agent</button>
     <pre id=agent_out></pre>
     <button id=reqpa disabled>Request PA</button>
@@ -239,6 +261,7 @@ def ui() -> Response:
     const hashCH=document.getElementById('hash_ch');
     const hashCCH=document.getElementById('hash_cch');
     const hashStatus=document.getElementById('hash_status');
+        const paRecover=document.getElementById('pa_recover');
         const paRemote=document.getElementById('pa_remote');
     const cmmUI=document.getElementById('cmm_ui');
         let phcObj=null;
@@ -251,7 +274,7 @@ def ui() -> Response:
         const payload={base_url:tpBase,user};
         try{
             const r=await fetch('/user/request_phc',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
-            const data=await r.json(); phcObj=data.phc; phcPre.textContent=JSON.stringify(data,null,2); document.getElementById('fetchcmm').disabled=!phcObj; document.getElementById('reqpa').disabled=!phcObj;
+            const data=await r.json(); phcObj=data.phc; phcPre.textContent=JSON.stringify(data,null,2); document.getElementById('fetchcmm').disabled=!phcObj; document.getElementById('reqpa').disabled=!phcObj; document.getElementById('recoverpa').disabled=!phcObj;
         }catch(e){ phcPre.textContent='Request PHC failed: '+(e&&e.message?e.message:'unknown'); }
         };
 
@@ -282,6 +305,7 @@ def ui() -> Response:
       hashCH.textContent = 'CH: ' + String(data.CH || '');
       hashCCH.textContent = 'CCH: ' + String(data.CCH || '');
       hashStatus.textContent = 'verified_ch: ' + String(data.verified_ch_user || false) + ', verified_cch: ' + String(data.verified_cch_user || false);
+      const recoverBtn = document.getElementById('recoverpa'); if(recoverBtn) recoverBtn.disabled = false;
       window.__PHC = data.PHC; window.__PA = data.PA;
       const createBtn = document.getElementById('createAgent');
       if(createBtn){
@@ -303,7 +327,21 @@ def ui() -> Response:
             const data=await r.json(); paRemote.textContent=JSON.stringify(data,null,2);
         }catch(e){ paRemote.textContent='Request PA failed: '+(e&&e.message?e.message:'unknown'); }
         };
+
+        document.getElementById('recoverpa').onclick = async ()=>{
+        const apBase = apEl && apEl.value ? apEl.value : 'http://127.0.0.1:8002';
+        const user={pii:{name:name.value,id_number:idnum.value,id_card_number:(idcard?idcard.value:''),email:email.value},bi:{last_login_ip:'127.0.0.1',passport_number:(passport?passport.value:'')},cdid:'cdid:user.placeholder',ecid:'g'};
+        const payload={base_url:apBase, phc:phcObj, user};
+        try{
+            const r=await fetch('/user/recover_pa',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
+            const data=await r.json(); paRecover.textContent=JSON.stringify(data,null,2);
+        }catch(e){ paRecover.textContent='Recover PA failed: '+(e&&e.message?e.message:'unknown'); }
+        };
     </script>
     </body></html>
     """
     return Response(content=html, media_type='text/html')
+class RequestPARecover(BaseModel):
+    base_url: str
+    phc: Dict[str, Any]
+    user: UserInfo

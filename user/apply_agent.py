@@ -55,7 +55,7 @@ def request_pa_remote(base_url: str, phc: Dict[str, Any], user: UserInfo) -> Dic
     ap_keys = pub_resp.json()
     ap_dlog_pk = int(str(ap_keys["ap_dlog_pk"]))
     sk_a, pk_a = dl_generate_user_keypair()
-    hid = sha256_hex(user.pii.id_number)
+    hid = user.pii.id_number
     tpac = phc.get("TPA") if isinstance(phc, dict) else {}
     ar_plain = {"PHC": phc, "HID": hid, "TPAC": tpac}
     ar = elgamal_encrypt_bytes(ap_dlog_pk, ar_plain)
@@ -67,6 +67,38 @@ def request_pa_remote(base_url: str, phc: Dict[str, Any], user: UserInfo) -> Dic
     par = data.get("par")
     raw = _elg_decrypt(sk_a, par)
     return json.loads(raw.decode())
+
+
+def request_pa_recover(base_url: str, phc: Dict[str, Any], user: UserInfo) -> Dict[str, Any]:
+    pub_resp = httpx.get(base_url.rstrip("/") + "/v1/ap/public_keys", timeout=10.0)
+    pub_resp.raise_for_status()
+    ap_dlog_pk = int(str(pub_resp.json()["ap_dlog_pk"]))
+    sk_a, pk_a = dl_generate_user_keypair()
+    hid = user.pii.id_number
+    crf = (phc.get("CRF") if isinstance(phc, dict) else None) or ((phc.get("SCID") or {}).get("RF") if isinstance(phc.get("SCID"), dict) else 0)
+    ar_plain = {"PHC": phc, "HID": hid, "CRF": crf}
+    ar = elgamal_encrypt_bytes(ap_dlog_pk, ar_plain)
+    payload = {"ar": ar, "user_pub": pk_a}
+    url = base_url.rstrip("/") + "/v1/ap/recover_pa"
+    try:
+        resp = httpx.post(url, json=payload, timeout=15.0)
+        resp.raise_for_status()
+        data = resp.json()
+        par = data.get("par")
+        raw = _elg_decrypt(sk_a, par)
+        return json.loads(raw.decode())
+    except httpx.HTTPStatusError as e:
+        if e.response is not None and e.response.status_code == 404:
+            url2 = base_url.rstrip("/") + "/v1/ap/request_pa"
+            resp2 = httpx.post(url2, json=payload, timeout=15.0)
+            resp2.raise_for_status()
+            data2 = resp2.json()
+            par2 = data2.get("par")
+            raw2 = _elg_decrypt(sk_a, par2)
+            obj = json.loads(raw2.decode())
+            obj["mode"] = "recover_fallback"
+            return obj
+        raise
 
 
 def request_cmm_init(base_url: str, phc: Dict[str, Any], user: UserInfo) -> Dict[str, Any]:

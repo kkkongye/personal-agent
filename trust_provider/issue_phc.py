@@ -210,6 +210,11 @@ def issue_phc_secure(payload: SecureInbound) -> Dict[str, Any]:
     secinfo = sym_encrypt(s1, json.dumps(secinfo_obj, separators=(",", ":")).encode())
     cid = ipfs_put(secinfo)
     phc["CID"] = cid
+    try:
+        cid_enc = sym_encrypt(s1, cid.encode())
+        phc["CID_enc"] = cid_enc
+    except Exception:
+        phc["CID_enc"] = None
     phc["CRF"] = crf
     return {"success": True, "phc": phc, "mode": "secure_phc_jsonld"}
 
