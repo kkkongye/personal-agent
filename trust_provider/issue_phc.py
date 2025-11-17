@@ -216,7 +216,10 @@ def issue_phc_secure(payload: SecureInbound) -> Dict[str, Any]:
         phc["CID_enc"] = cid_enc
     except Exception:
         phc["CID_enc"] = None
-    phc["CRF"] = crf
+    try:
+        phc["CRF"] = {"c1": str(crf.get("c1")), "c2": str(crf.get("c2"))}
+    except Exception:
+        phc["CRF"] = crf
     return {"success": True, "phc": phc, "mode": "secure_phc_jsonld"}
 
 

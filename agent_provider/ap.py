@@ -141,9 +141,16 @@ def cmm_submit(payload: CMMSubmitRequest) -> Dict[str, Any]:
         r_ap = _rand_int()
         ch_val = ch_compute(AP_PK, apm_prime, apa, r_ap)
         af_prev = phc.get("ASO", {}).get("TPM", {}).get("AF")
-        rf_val = ((phc.get("SCID") or {}).get("RF") if isinstance(phc.get("SCID"), dict) else None)
+        # Prefer CRF.c1 as the exponent source; fallback to SCID.RF
+        crf_src = None
         try:
-            crf_int = int(str(rf_val or 0)) % DL_Q
+            crf_src = (phc.get("CRF") or {}).get("c1")
+        except Exception:
+            crf_src = None
+        if crf_src is None:
+            crf_src = ((phc.get("SCID") or {}).get("RF") if isinstance(phc.get("SCID"), dict) else None)
+        try:
+            crf_int = int(str(crf_src or 0)) % DL_Q
         except Exception:
             crf_int = 0
         af_calc = compute_af_formal(str(hid), AP_PK, TP_DL_PK, cmi_int % DL_Q, crf_int, rb2)
