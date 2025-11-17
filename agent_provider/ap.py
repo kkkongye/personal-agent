@@ -148,7 +148,6 @@ def cmm_submit(payload: CMMSubmitRequest) -> Dict[str, Any]:
         except Exception:
             crf_int = 0
         af_calc = compute_af_formal(str(hid), AP_PK, TP_DL_PK, cmi_int % DL_Q, crf_int, rb2)
-        verified_af = (str(af_prev) == str(af_calc))
         cch_val = cch_compute(AP_PK, TP_DL_PK, cmi_int, crf_int, rb2)
         try:
             phc_mod = json.loads(json.dumps(phc))
@@ -175,10 +174,28 @@ def cmm_submit(payload: CMMSubmitRequest) -> Dict[str, Any]:
                 proof["needs_tp_resign"] = True
         except Exception:
             phc_mod = phc
+            try:
+                phc_mod.setdefault("ASO", {}).update({"APM": apm_prime})
+                phc_mod.setdefault("ASO", {}).setdefault("TPM", {})["AF"] = str(af_calc)
+                phc_mod["APA"] = apa
+                phc_mod.setdefault("PROOF", {})["needs_tp_resign"] = True
+            except Exception:
+                pass
+        # Recompute verified_af against updated PHC
+        try:
+            af_now = (phc_mod.get("ASO") or {}).get("TPM", {}).get("AF")
+            verified_af = (str(af_now) == str(af_calc))
+        except Exception:
+            verified_af = False
         try:
             upub = int(str(payload.user_pub))
         except Exception:
             return {"success": False, "error": "invalid_user_pub"}
+        # Persist AP local state for recovery
+        try:
+            _apdb_put(hid, {"CMC": cmc, "CMI": str(cmi_int), "r_bind2": str(rb2), "ts": datetime.utcnow().isoformat() + "Z"})
+        except Exception:
+            pass
         enc = _encrypt_to_user(upub, {
             "r_bind2": str(rb2),
             "r_ap": str(r_ap),
