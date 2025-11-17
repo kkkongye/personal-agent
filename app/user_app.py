@@ -163,7 +163,6 @@ def ui() -> Response:
     <pre id=phc></pre>
     <button id=fetchcmm disabled>Fetch CMM</button>
     <div id=cmm_ui></div>
-    <pre id=cmm_raw></pre>
     <button id=submitcmc disabled>Submit CMC</button>
     <pre id=pa_cmm></pre>
     <pre id=hash_ch></pre>
@@ -186,8 +185,7 @@ def ui() -> Response:
     const hashCCH=document.getElementById('hash_cch');
     const hashStatus=document.getElementById('hash_status');
         const paRemote=document.getElementById('pa_remote');
-        const cmmUI=document.getElementById('cmm_ui');
-        const cmmRaw=document.getElementById('cmm_raw');
+    const cmmUI=document.getElementById('cmm_ui');
         let phcObj=null;
         let cmmObj=null;
         let cmcObj=null;
@@ -206,9 +204,8 @@ def ui() -> Response:
         const apBase = 'http://127.0.0.1:8002';
         const user={pii:{name:name.value,id_number:idnum.value,id_card_number:(idcard?idcard.value:''),email:email.value},bi:{last_login_ip:'127.0.0.1',passport_number:(passport?passport.value:'')},cdid:'cdid:user.placeholder',ecid:'g'};
         const r=await fetch('/user/cmm_init',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({base_url:apBase, phc:phcObj, user})});
-        const data=await r.json(); cmmObj=data.cmm; cmcObj=(cmmObj||[]).map(row=>row[0]);
-        window.__cmmSk = String(data.sk||""); window.__cmmPk = String(data.pk||"");
-        cmmRaw.textContent = JSON.stringify({cmm:cmmObj},null,2);
+      const data=await r.json(); cmmObj=data.cmm; cmcObj=(cmmObj||[]).map(row=>row[0]);
+      window.__cmmSk = String(data.sk||""); window.__cmmPk = String(data.pk||"");
         const htmlRows=(cmmObj||[]).map((row,i)=>{
             const opts=row.map((opt,j)=>`<label><input type=radio name=\"row_${i}\" value='${j}' ${j===0?"checked":""}>${opt.label}</label>`).join(' ');
             return `<div>Row ${i+1}: ${opts}</div>`;
