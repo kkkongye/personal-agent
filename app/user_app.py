@@ -12,6 +12,7 @@ from trust_provider.issue_phc import TP_DL_PK
 from agent_provider.ap import AP_PK
 import httpx
 from user.crypto import compute_r_bind, canonical_json, sha256_hex, compute_cmi, dl_generate_user_keypair
+from user.crypto import elgamal_encrypt_bytes
 from trust_provider.issue_phc import issue_phc, ASOCompleteModel
 
 app = FastAPI(title="User Service")
@@ -47,6 +48,19 @@ class RequestPARecover(BaseModel):
     base_url: str
     phc: Dict[str, Any]
     user: UserInfo
+
+class RequestUpdateInit(BaseModel):
+    base_url: str
+    phc: Dict[str, Any]
+    user: UserInfo
+
+class RequestUpdateSubmit(BaseModel):
+    base_url: str
+    cmc: list
+    hid: str
+    phc: Dict[str, Any]
+    user_sk: str
+    user_pk: str
 
 @app.post('/user/request_phc')
 def user_request_phc(req: RequestPHC) -> Dict[str, Any]:
@@ -216,6 +230,92 @@ def user_recover_pa(req: RequestPARecover) -> Dict[str, Any]:
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+@app.post('/user/update_init')
+def user_update_init(req: RequestUpdateInit) -> Dict[str, Any]:
+    try:
+        import httpx
+        pub_resp = httpx.get(req.base_url.rstrip('/') + '/v1/ap/public_keys', timeout=10.0)
+        pub_resp.raise_for_status()
+        ap_dlog_pk = int(str(pub_resp.json()["ap_dlog_pk"]))
+    except Exception:
+        from agent_provider.ap import AP_PK as ap_dlog_pk
+    sk_a, pk_a = dl_generate_user_keypair()
+    hid = sha256_hex(req.user.pii.id_number)
+    crf = (req.phc.get("CRF") if isinstance(req.phc, dict) else None) or ((req.phc.get("SCID") or {}).get("RF") if isinstance(req.phc, dict) else 0)
+    ar_plain = {"PHC": req.phc, "HID": hid, "CRF": crf}
+    ar = elgamal_encrypt_bytes(ap_dlog_pk, ar_plain)
+    try:
+        import httpx
+        r = httpx.post(req.base_url.rstrip('/') + '/v1/ap/update_init', json={"ar": ar, "user_pub": pk_a}, timeout=15.0)
+        r.raise_for_status()
+        data = r.json()
+        cmm_enc = data.get("cmm_enc")
+        raw = elgamal_decrypt_bytes(int(sk_a), cmm_enc)
+        import json
+        return {"cmm": json.loads(raw.decode()).get("CMM"), "sk": str(sk_a), "pk": str(pk_a)}
+    except Exception:
+        from agent_provider.ap import _build_cmm_matrix
+        cmm = _build_cmm_matrix(hid, req.phc)
+        return {"cmm": cmm, "sk": str(sk_a), "pk": str(pk_a), "fallback": True}
+
+@app.post('/user/update_submit')
+def user_update_submit(req: RequestUpdateSubmit) -> Dict[str, Any]:
+    try:
+        import httpx, json
+        pub_resp = httpx.get(req.base_url.rstrip('/') + '/v1/ap/public_keys', timeout=10.0)
+        pub_resp.raise_for_status()
+        ap_dlog_pk = int(str(pub_resp.json()["ap_dlog_pk"]))
+    except Exception:
+        from agent_provider.ap import AP_PK as ap_dlog_pk
+    try:
+        user_pk_int = int(str(req.user_pk or ""))
+        user_sk_int = int(str(req.user_sk or ""))
+        if user_pk_int == 0 or user_sk_int == 0:
+            raise ValueError("empty keys")
+    except Exception:
+        user_sk_int, user_pk_int = dl_generate_user_keypair()
+    obj = {"CMC": req.cmc, "HID": req.hid, "PHC": req.phc}
+    cmc_enc = elgamal_encrypt_bytes(ap_dlog_pk, obj)
+    url = req.base_url.rstrip('/') + '/v1/ap/update_submit'
+    try:
+        import httpx
+        resp = httpx.post(url, json={"cmc_enc": cmc_enc, "user_pub": user_pk_int}, timeout=15.0)
+        resp.raise_for_status()
+        data = resp.json()
+        par = data.get("par")
+        if not par:
+            return data
+        raw = elgamal_decrypt_bytes(int(user_sk_int), par).decode()
+        obj2 = json.loads(raw)
+        calc_cmi_int = hcgen_cmi(req.cmc, req.hid)
+        pa_cmi = ((obj2.get("PA") or {}).get("APM") or {}).get("CMI")
+        verified_cmi = (str(calc_cmi_int) == str(pa_cmi))
+        try:
+            ap_pk_int = int(str(obj2.get("ap_pk")))
+        except Exception:
+            ap_pk_int = 0
+        try:
+            tp_pk_int = int(str(obj2.get("tp_pk")))
+        except Exception:
+            tp_pk_int = 0
+        try:
+            rbind3_int = int(str(obj2.get("r_bind2") or 0))
+        except Exception:
+            rbind3_int = 0
+        try:
+            crf_src = ((obj2.get("PHC") or {}).get("SCID") or {}).get("RF")
+            crf_int = int(str(crf_src or 0))
+        except Exception:
+            crf_int = 0
+        af_calc_user = compute_af_formal(str(req.hid), ap_pk_int, tp_pk_int, int(str(calc_cmi_int)), crf_int, rbind3_int)
+        af_prev = ((obj2.get("PHC") or {}).get("ASO") or {}).get("TPM", {}).get("AF")
+        verified_af = (str(af_prev) == str(af_calc_user))
+        obj2["verified_cmi"] = verified_cmi
+        obj2["verified_af_user"] = verified_af
+        return obj2
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 @app.get('/user')
 def ui() -> Response:
     html = """
@@ -243,12 +343,17 @@ def ui() -> Response:
     <pre id=hash_ch></pre>
     <pre id=hash_cch></pre>
     <pre id=hash_status></pre>
-    <button id=recoverpa disabled>Recover PA</button>
-    <pre id=pa_recover></pre>
+
     <button id=createAgent disabled>Create Personal Agent</button>
     <pre id=agent_out></pre>
+    <button id=recoverpa disabled>Recover PA</button>
+    <pre id=pa_recover></pre>
     <button id=reqpa disabled>Request PA</button>
     <pre id=pa_remote></pre>
+    <button id=updatepa disabled>Update PA</button>
+    <div id=upd_cmm_ui></div>
+    <button id=submitUpdate disabled>Submit Update</button>
+    <pre id=pa_update></pre>
 
     <script>
         const tpEl=document.getElementById('tp');
@@ -276,7 +381,7 @@ def ui() -> Response:
         const payload={base_url:tpBase,user};
         try{
             const r=await fetch('/user/request_phc',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
-            const data=await r.json(); phcObj=data.phc; phcPre.textContent=JSON.stringify(data,null,2); document.getElementById('fetchcmm').disabled=!phcObj; document.getElementById('reqpa').disabled=!phcObj; document.getElementById('recoverpa').disabled=!phcObj;
+            const data=await r.json(); phcObj=data.phc; phcPre.textContent=JSON.stringify(data,null,2); document.getElementById('fetchcmm').disabled=!phcObj; document.getElementById('reqpa').disabled=!phcObj; document.getElementById('recoverpa').disabled=!phcObj; const updBtn=document.getElementById('updatepa'); if(updBtn) updBtn.disabled=!phcObj;
         }catch(e){ phcPre.textContent='Request PHC failed: '+(e&&e.message?e.message:'unknown'); }
         };
 
@@ -338,6 +443,26 @@ def ui() -> Response:
             const r=await fetch('/user/recover_pa',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
             const data=await r.json(); paRecover.textContent=JSON.stringify(data,null,2);
         }catch(e){ paRecover.textContent='Recover PA failed: '+(e&&e.message?e.message:'unknown'); }
+        };
+
+        document.getElementById('updatepa').onclick = async ()=>{
+        const apBase = apEl && apEl.value ? apEl.value : 'http://127.0.0.1:8002';
+        const user={pii:{name:name.value,id_number:idnum.value,id_card_number:(idcard?idcard.value:''),email:email.value},bi:{last_login_ip:'127.0.0.1',passport_number:(passport?passport.value:'')},cdid:'cdid:user.placeholder',ecid:'g'};
+        const r=await fetch('/user/update_init',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({base_url:apBase, phc:phcObj, user})});
+        const data=await r.json(); const cmm=data.cmm; window.__updSk=String(data.sk||""); window.__updPk=String(data.pk||""); window.__lastCMM=cmm;
+        const updUI=document.getElementById('upd_cmm_ui');
+        const htmlRows=(cmm||[]).map((row,i)=>{ const opts=row.map((opt,j)=>`<label><input type=radio name=\"upd_row_${i}\" value='${j}' ${j===0?"checked":""}>${opt.label}</label>`).join(' '); return `<div>Update Row ${i+1}: ${opts}</div>`; }).join('');
+        updUI.innerHTML = htmlRows;
+        document.getElementById('submitUpdate').disabled = !((cmm && cmm.length>0) && (window.__updSk && window.__updPk));
+        };
+
+        document.getElementById('submitUpdate').onclick = async ()=>{
+        const apBase = apEl && apEl.value ? apEl.value : 'http://127.0.0.1:8002';
+        const hid = idnum.value? (await (async()=>{return (idnum.value)})()) : '';
+        const cmc = (window.__lastCMM||[]).map((row,i)=>{ const idx = Number((document.querySelector(`input[name='upd_row_${i}']:checked`)||{value:0}).value); return row[idx]; });
+        const payload={base_url:apBase, cmc:cmc||[], hid:hid, phc:phcObj, user_sk: window.__updSk||"", user_pk: window.__updPk||""};
+        const r=await fetch('/user/update_submit',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
+        const data=await r.json(); const out=document.getElementById('pa_update'); out.textContent=JSON.stringify(data,null,2);
         };
     </script>
     </body></html>

@@ -240,9 +240,14 @@ def recover_pa(payload: RecoverInbound) -> Dict[str, Any]:
         cmc = rec.get("CMC") or []
         cmi_stored = rec.get("CMI") or "0"
         cmi_calc = str(hcgen_cmi(cmc, hid))
+        # Resolve CRF exponent: prefer CRF.c1 if dict provided, fallback to SCID.RF
         rf_val = ((phc.get("SCID") or {}).get("RF") if isinstance(phc.get("SCID"), dict) else None)
+        if isinstance(crf_in, dict):
+            crf_src = crf_in.get("c1")
+        else:
+            crf_src = crf_in
         try:
-            crf_int = int(str(crf_in or rf_val or 0)) % DL_Q
+            crf_int = int(str(crf_src or rf_val or 0)) % DL_Q
         except Exception:
             crf_int = 0
         af_prev = str(tpm.get("AF"))
@@ -389,4 +394,112 @@ def recover_pa(payload: RecoverInbound) -> Dict[str, Any]:
         return {"success": True, "par": enc}
     except Exception as e:
         log.error("recover_pa_failed: %s", str(e))
+        return {"success": False, "error": str(e)}
+
+class UpdateInitRequest(BaseModel):
+    ar: Dict[str, Any]
+    user_pub: int
+
+class UpdateSubmitRequest(BaseModel):
+    cmc_enc: Dict[str, Any]
+    user_pub: int | str
+
+@router.post("/ap/update_init")
+def update_init(payload: UpdateInitRequest) -> Dict[str, Any]:
+    try:
+        raw = elgamal_decrypt_bytes(AP_SK, payload.ar)
+        obj = json_loads(raw)
+    except Exception:
+        raise HTTPException(status_code=400, detail="decrypt_failed")
+    phc = obj.get("PHC")
+    hid = obj.get("HID")
+    crf = obj.get("CRF")
+    if not isinstance(phc, dict) or not isinstance(hid, str):
+        raise HTTPException(status_code=400, detail="invalid_payload")
+    cmm = _build_cmm_matrix(hid, phc)
+    return {"success": True, "cmm_enc": _encrypt_to_user(payload.user_pub, {"CMM": cmm, "CRF": crf})}
+
+@router.post("/ap/update_submit")
+def update_submit(payload: UpdateSubmitRequest) -> Dict[str, Any]:
+    try:
+        raw = elgamal_decrypt_bytes(AP_SK, payload.cmc_enc)
+        obj = json_loads(raw)
+        cmc = obj.get("CMC")
+        hid = obj.get("HID")
+        phc = obj.get("PHC")
+        if not isinstance(cmc, list) or not isinstance(hid, str) or not isinstance(phc, dict):
+            return {"success": False, "error": "invalid_payload"}
+        cmi_int = hcgen_cmi(cmc, hid)
+        apm_prime = {"CMI": str(cmi_int), "Time": datetime.utcnow().isoformat() + "Z"}
+        apid = str(AP_PK)
+        sig = schnorr_sign(AP_SK, canonical_json({"APM": apm_prime, "APid": apid}).encode())
+        apa = {"APid": apid, "APproof": {"r": str(sig["r"]), "e": str(sig["e"]), "s": str(sig["s"])}}
+        pa = {"APM": apm_prime, "APA": apa}
+        rb3 = _rand_int()
+        r_ap3 = _rand_int()
+        ch_val = ch_compute(AP_PK, apm_prime, apa, r_ap3)
+        af_prev = phc.get("ASO", {}).get("TPM", {}).get("AF")
+        try:
+            crf_src = ((phc.get("SCID") or {}).get("RF") if isinstance(phc.get("SCID"), dict) else None)
+            crf_int = int(str(crf_src or 0)) % DL_Q
+        except Exception:
+            crf_int = 0
+        af_calc = compute_af_formal(str(hid), AP_PK, TP_DL_PK, cmi_int % DL_Q, crf_int, rb3)
+        verified_af = (str(af_prev) == str(af_calc))
+        cch_val = cch_compute(AP_PK, TP_DL_PK, cmi_int, crf_int, rb3)
+        try:
+            phc_mod = json.loads(json.dumps(phc))
+            old_apm = ((phc_mod.get("ASO") or {}).get("APM") or {})
+            old_apa = phc_mod.get("APA") or {}
+            proof = phc_mod.setdefault("PROOF", {})
+            apch_old = str(proof.get("APCH"))
+            r_ap_old = int(str(proof.get("APCH_r") or 0)) % DL_Q
+            h_old = hash_to_int(canonical_json({"APM": old_apm, "APA": old_apa}).encode()) % DL_Q
+            h_new = hash_to_int(canonical_json({"APM": apm_prime, "APA": apa}).encode()) % DL_Q
+            inv_x = inv_mod(AP_SK, DL_Q)
+            r_ap_new = (r_ap_old + (h_old - h_new) * inv_x) % DL_Q
+            apch_try = str(ch_compute(AP_PK, apm_prime, apa, r_ap_new))
+            if apch_old and apch_try == apch_old:
+                phc_mod.setdefault("ASO", {}).update({"APM": apm_prime})
+                phc_mod.setdefault("ASO", {}).setdefault("TPM", {})["AF"] = str(af_calc)
+                phc_mod["APA"] = apa
+                proof["APCH_r"] = str(r_ap_new)
+            else:
+                phc_mod.setdefault("ASO", {}).update({"APM": apm_prime})
+                phc_mod.setdefault("ASO", {}).setdefault("TPM", {})["AF"] = str(af_calc)
+                phc_mod["APA"] = apa
+                proof["APCH"] = apch_try
+                proof["needs_tp_resign"] = True
+        except Exception:
+            phc_mod = phc
+            try:
+                phc_mod.setdefault("ASO", {}).update({"APM": apm_prime})
+                phc_mod.setdefault("ASO", {}).setdefault("TPM", {})["AF"] = str(af_calc)
+                phc_mod["APA"] = apa
+                phc_mod.setdefault("PROOF", {})["needs_tp_resign"] = True
+            except Exception:
+                pass
+        try:
+            upub = int(str(payload.user_pub))
+        except Exception:
+            return {"success": False, "error": "invalid_user_pub"}
+        try:
+            _apdb_put(hid, {"CMC": cmc, "CMI": str(cmi_int), "r_bind2": str(rb3), "ts": datetime.utcnow().isoformat() + "Z"})
+        except Exception:
+            pass
+        enc = _encrypt_to_user(upub, {
+            "r_bind2": str(rb3),
+            "r_ap": str(r_ap3),
+            "PHC": phc_mod,
+            "PHC_original": phc,
+            "PA": pa,
+            "CH": str(ch_val),
+            "CCH": str(cch_val),
+            "verified_af": (str((phc_mod.get("ASO") or {}).get("TPM", {}).get("AF")) == str(af_calc)),
+            "ap_pk": str(AP_PK),
+            "tp_pk": str(TP_DL_PK),
+        })
+        return {"success": True, "par": enc}
+    except Exception as e:
+        log.error("update_submit_failed: %s", str(e))
         return {"success": False, "error": str(e)}
