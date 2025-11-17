@@ -39,10 +39,6 @@ def sign_with_secret(secret: str, data: Any) -> str:
     return sha256_hex(secret + "|" + canonical_json(data))
 
 
-# ================================
-# Secure flow: Ed25519 + RSA-OAEP
-# ================================
-# RSA/Ed25519 已移除；客户端安全通道使用 DLog + ElGamal + Schnorr
  
 def dl_generate_user_keypair():
     sk = secrets.randbelow(DL_Q - 1) + 1

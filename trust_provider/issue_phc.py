@@ -116,10 +116,14 @@ def issue_phc(aso: ASOCompleteModel) -> Dict[str, Any]:
     else:
         if not aso.af or not aso.cmi:
             raise HTTPException(status_code=400, detail="Missing 'af' or 'cmi' for ASO when TPM/APM not provided")
+        # Construct SCID and DID per spec (SCID = {AF, RF}); RF unavailable in legacy path -> use 0
+        scid_af = aso.af
+        scid_rf = 0
+        did = f"did:wba:{scid_af}.{scid_rf}:{(aso.cdid or 'example').split(':')[-1]}"
         tpm = {
             "Time": datetime.utcnow().isoformat() + "Z",
-            "CDID": aso.cdid or "cdid:placeholder",
-            "AF": aso.af,
+            "CDID": did,
+            "AF": scid_af,
             "ECID": aso.ecid or "g",
         }
         apm = {
@@ -129,19 +133,21 @@ def issue_phc(aso: ASOCompleteModel) -> Dict[str, Any]:
 
     aso_built = {"TPM": tpm, "APM": apm}
 
-    # 2) TPA: choose TPid (use a deterministic id derived from public key stub)
-    tpid = "tp.example"
+    # 2) TPA: use TP public key as TPid
+    tpid = str(TP_DL_PK)
     tpproof = sign_with_secret(TP_PAILLIER.private["lambda"], {"TPM": tpm, "TPid": tpid})
     tpa = {"TPid": tpid, "TPproof": tpproof}
 
-    # 3) APA (placeholder): APproof is a stub signature with a fixed secret
-    apid = "ap.placeholder"
+    # 3) APA: use AP public key as APid
+    apid = str(AP_DL_PK)
     ap_secret = "ap_secret_placeholder"
     approof = sign_with_secret(ap_secret, {"APM": apm, "APid": apid})
     apa = {"APid": apid, "APproof": approof}
 
-    # 4) Build PHC with PROOF fields
-    phc = build_phc(aso=aso_built, tpa=tpa, apa=apa, tp_secret=TP_PAILLIER.private["lambda"])
+    # 4) Build PHC with PROOF fields (use formal CH for TPCH/APCH)
+    # Attach SCID when available (legacy path uses RF=0)
+    phc = build_phc(aso=aso_built, tpa=tpa, apa=apa, tp_secret=TP_PAILLIER.private["lambda"], tp_pk=TP_DL_PK, ap_pk=AP_DL_PK)
+    phc.setdefault("SCID", {"AF": tpm.get("AF"), "RF": scid_rf})
 
     return {"success": True, "phc": phc}
 

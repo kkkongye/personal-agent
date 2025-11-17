@@ -105,9 +105,26 @@ def user_cmm_submit(req: RequestCMMSubmit) -> Dict[str, Any]:
         rbind2_int = int(str(obj.get("r_bind2") or 0))
     except Exception:
         rbind2_int = 0
-    af_calc_user = compute_af_formal(str(req.hid), AP_PK, TP_DL_PK, cmi_int, crf_int, rbind2_int)
+    try:
+        ap_pk_int = int(str(obj.get("ap_pk")))
+    except Exception:
+        ap_pk_int = 0
+    try:
+        tp_pk_int = int(str(obj.get("tp_pk")))
+    except Exception:
+        tp_pk_int = 0
+    af_calc_user = compute_af_formal(str(req.hid), ap_pk_int, tp_pk_int, cmi_int, crf_int, rbind2_int)
     af_prev = ((obj.get("PHC") or {}).get("ASO") or {}).get("TPM", {}).get("AF")
     verified_af = (str(af_prev) == str(af_calc_user))
+    # Verify CH/CCH
+    try:
+        r_ap_val = int(str(obj.get("r_ap") or 0))
+    except Exception:
+        r_ap_val = 0
+    ch_calc = ch_compute(ap_pk_int, (obj.get("PA") or {}).get("APM") or {}, (obj.get("PA") or {}).get("APA") or {}, r_ap_val)
+    cch_calc = cch_compute(ap_pk_int, tp_pk_int, cmi_int, crf_int, rbind2_int)
+    verified_ch = (str(ch_calc) == str(obj.get("CH")))
+    verified_cch = (str(cch_calc) == str(obj.get("CCH")))
     # Build PA.MEMORY and encrypt with user's public key (ElGamal)
     from user.crypto import elgamal_encrypt_bytes as user_elg_enc
     memory_payload = {
@@ -119,6 +136,8 @@ def user_cmm_submit(req: RequestCMMSubmit) -> Dict[str, Any]:
     memory_enc = user_elg_enc(int(str(req.user_pk or "0")), memory_payload)
     obj["verified_cmi"] = verified_cmi
     obj["verified_af_user"] = verified_af
+    obj["verified_ch_user"] = verified_ch
+    obj["verified_cch_user"] = verified_cch
     obj["memory_enc"] = memory_enc
     return obj
 
@@ -147,6 +166,9 @@ def ui() -> Response:
     <pre id=cmm_raw></pre>
     <button id=submitcmc disabled>Submit CMC</button>
     <pre id=pa_cmm></pre>
+    <pre id=hash_ch></pre>
+    <pre id=hash_cch></pre>
+    <pre id=hash_status></pre>
     <button id=reqpa disabled>Request PA</button>
     <pre id=pa_remote></pre>
 
@@ -159,7 +181,10 @@ def ui() -> Response:
         const idcard=document.getElementById('idcard');
         const passport=document.getElementById('passport');
         const phcPre=document.getElementById('phc');
-        const paCmm=document.getElementById('pa_cmm');
+    const paCmm=document.getElementById('pa_cmm');
+    const hashCH=document.getElementById('hash_ch');
+    const hashCCH=document.getElementById('hash_cch');
+    const hashStatus=document.getElementById('hash_status');
         const paRemote=document.getElementById('pa_remote');
         const cmmUI=document.getElementById('cmm_ui');
         const cmmRaw=document.getElementById('cmm_raw');
@@ -200,7 +225,11 @@ def ui() -> Response:
         const apBase = 'http://127.0.0.1:8002';
         const hid = idnum.value? (await (async()=>{return (idnum.value)})()) : '';
         const r=await fetch('/user/cmm_submit',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({base_url:apBase, cmc:cmcObj||[], hid:hid, phc:phcObj, user_sk: window.__cmmSk||"", user_pk: window.__cmmPk||""})});
-        const data=await r.json(); paCmm.textContent=JSON.stringify(data,null,2);
+      const data=await r.json();
+      paCmm.textContent=JSON.stringify(data,null,2);
+      hashCH.textContent = 'CH: ' + String(data.CH || '');
+      hashCCH.textContent = 'CCH: ' + String(data.CCH || '');
+      hashStatus.textContent = 'verified_ch: ' + String(data.verified_ch_user || false) + ', verified_cch: ' + String(data.verified_cch_user || false);
         };
         
         document.getElementById('reqpa').onclick = async ()=>{

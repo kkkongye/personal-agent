@@ -17,6 +17,8 @@ from crypto_lib import (
     sha256_hex,
     sign_with_secret,
     verify_with_secret,
+    ch_compute,
+    DL_Q,
 )
 
 
@@ -25,6 +27,8 @@ def build_phc(
     tpa: Dict[str, Any],
     apa: Dict[str, Any],
     tp_secret: str,
+    tp_pk: int,
+    ap_pk: int,
 ) -> Dict[str, Any]:
     """Construct a PHC JSON-LD object with required fields and proofs.
 
@@ -46,12 +50,13 @@ def build_phc(
         "APA": apa,
     }
 
-    # Build TPCH/APCH using chameleon-hash stub
+    # Build TPCH/APCH using DL-based chameleon hash
     tpm_tpa = {"TPM": aso.get("TPM", {}), "TPA": tpa}
     apm_apa = {"APM": aso.get("APM", {}), "APA": apa}
-
-    tpch = sha256_hex(canonical_json(tpm_tpa))
-    apch = sha256_hex(canonical_json(apm_apa))
+    r_tp = secrets.randbelow(DL_Q - 1) + 1
+    r_ap = secrets.randbelow(DL_Q - 1) + 1
+    tpch = str(ch_compute(tp_pk, tpm_tpa, {}, r_tp))
+    apch = str(ch_compute(ap_pk, apm_apa, {}, r_ap))
 
     # CHproof: TP signs the concatenation of TPCH || APCH deterministically
     ch_concat = {"TPCH": tpch, "APCH": apch}

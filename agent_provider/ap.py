@@ -10,6 +10,7 @@ from crypto_lib import (
     canonical_json,
     sha256_hex,
     DL_P,
+    DL_Q,
 )
 from trust_provider.issue_phc import TP_PAILLIER, TP_DL_PK
 from crypto_lib import compute_af_formal, hcgen_cmi, ch_compute, cch_compute
@@ -150,7 +151,17 @@ def cmm_submit(payload: CMMSubmitRequest) -> Dict[str, Any]:
     af_calc = compute_af_formal(str(hid), AP_PK, TP_DL_PK, cmi_int % DL_Q, crf_int, rb2)
     verified_af = (str(af_prev) == str(af_calc))
     cch_val = cch_compute(AP_PK, TP_DL_PK, cmi_int, crf_int, rb2)
-    par_obj = {"r_bind2": str(rb2), "PHC": phc, "PA": pa, "CH": str(ch_val), "CCH": str(cch_val), "verified_af": verified_af}
+    par_obj = {
+        "r_bind2": str(rb2),
+        "r_ap": str(r_ap),
+        "PHC": phc,
+        "PA": pa,
+        "CH": str(ch_val),
+        "CCH": str(cch_val),
+        "verified_af": verified_af,
+        "ap_pk": str(AP_PK),
+        "tp_pk": str(TP_DL_PK),
+    }
     try:
         upub = int(str(payload.user_pub))
     except Exception:
