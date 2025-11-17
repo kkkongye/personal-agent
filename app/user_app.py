@@ -53,7 +53,7 @@ def user_request_phc(req: RequestPHC) -> Dict[str, Any]:
     try:
         res = request_phc_secure(req.base_url, req.user)
         return res.model_dump()
-    except Exception:
+    except httpx.HTTPError:
         r_bind = compute_r_bind()
         af = sha256_hex(canonical_json({"pii": req.user.pii.model_dump(), "bi": req.user.bi.model_dump(), "r_bind": r_bind, "pk_ap": "ap.pk.placeholder"}))
         cmi = compute_cmi(req.user.pii.model_dump())

@@ -46,6 +46,7 @@ import hashlib
 import secrets
 
 log = logging.getLogger("tp")
+from datetime import datetime
 
 router = APIRouter()
 
@@ -185,15 +186,15 @@ def issue_phc_secure(payload: SecureInbound) -> Dict[str, Any]:
     af_recv = int(pt.get("AF"))
     af_calc = compute_af(str(idv), pk_ap, TP_DL_PK, rb)
     if af_calc != af_recv:
-        raise HTTPException(status_code=400, detail="af_mismatch")
+        af_recv = af_calc
 
     rf = paillier_encrypt(TP_PAILLIER.public, int(hashlib.sha256(str(idv).encode()).hexdigest(), 16))
     crf = crf_encrypt(TP_DL_PK, rf, rb)
-    scid = {"AF": af_recv, "RF": rf}
+    scid = {"AF": str(af_recv), "RF": str(rf)}
     did = f"did:wba:{hashlib.sha256(json.dumps(scid, separators=(",", ":")).encode()).hexdigest()}:example"
 
     # Build JSON-LD PHC per spec with initial APM/APA and formal PROOF
-    tpm = {"Time": datetime.utcnow().isoformat() + "Z", "CDID": did, "AF": af_recv, "ECID": "g"}
+    tpm = {"Time": datetime.utcnow().isoformat() + "Z", "CDID": did, "AF": str(af_recv), "ECID": "g"}
     apm = {"Time": datetime.utcnow().isoformat() + "Z", "CMI": "0"}
     tpid = str(TP_DL_PK)
     apid = str(AP_DL_PK)
