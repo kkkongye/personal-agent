@@ -179,10 +179,11 @@ def ipfs_put(content: str) -> str:
     if not cid:
         cid = "cid:" + sha256_hex(content)
     try:
-        import os
+        import os, re
         root = os.path.join(os.getcwd(), "ipfs_store")
         os.makedirs(root, exist_ok=True)
-        with open(os.path.join(root, cid.replace("/", "_")), "w", encoding="utf-8") as f:
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", cid)
+        with open(os.path.join(root, safe), "w", encoding="utf-8") as f:
             f.write(content)
     except Exception:
         pass
@@ -199,9 +200,10 @@ def ipfs_get(cid: str) -> str:
     except Exception:
         pass
     try:
-        import os
+        import os, re
         root = os.path.join(os.getcwd(), "ipfs_store")
-        with open(os.path.join(root, cid.replace("/", "_")), "r", encoding="utf-8") as f:
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", cid)
+        with open(os.path.join(root, safe), "r", encoding="utf-8") as f:
             return f.read()
     except Exception:
         return ""

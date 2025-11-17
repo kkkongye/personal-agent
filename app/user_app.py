@@ -107,15 +107,10 @@ def user_cmm_submit(req: RequestCMMSubmit) -> Dict[str, Any]:
     verified_cmi = (str(calc_cmi_int) == str(pa_cmi))
     # Verify AF formal: AF ?= H(ID) · pk_ap^CMI' · pk_tp^CRF · g^r_bind''
     cmi_int = int(str(calc_cmi_int))
-    # Prefer CRF.c1; fallback to SCID.RF
+    # Use SCID.RF as exponent source for formal AF verification
     try:
-        crf_src = ((obj.get("PHC") or {}).get("CRF") or {}).get("c1")
-    except Exception:
-        crf_src = None
-    if crf_src is None:
-        crf_src = ((obj.get("PHC") or {}).get("SCID") or {}).get("RF")
-    try:
-        crf_int = int(str(crf_src or 0))
+        rf_val = ((obj.get("PHC") or {}).get("SCID") or {}).get("RF")
+        crf_int = int(str(rf_val or 0))
     except Exception:
         crf_int = 0
     try:
