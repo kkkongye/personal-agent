@@ -33,9 +33,11 @@ from crypto_lib import (
     compute_af,
     kdf_s1,
     sym_encrypt,
+    sym_decrypt,
     cch_hash,
     DL_P,
     ipfs_put,
+    ipfs_get,
     crf_encrypt,
 )
 import base64
@@ -80,6 +82,9 @@ class PHCModel(BaseModel):
 
 class TraceRequest(BaseModel):
     rf_ciphertext: str
+
+class RevealRequest(BaseModel):
+    phc: Dict[str, Any]
 
 
 class SecureInbound(BaseModel):
@@ -241,3 +246,59 @@ def trace_identity(req: TraceRequest) -> Dict[str, Any]:
     """
     decrypted = paillier_decrypt(TP_PAILLIER.private, req.rf_ciphertext)
     return {"success": True, "decrypted": decrypted}
+
+
+@router.post("/tp/reveal")
+def reveal_identity(req: RevealRequest) -> Dict[str, Any]:
+    """Reveal user identity from PHC using RF and CID.
+
+    Steps:
+    - Derive s1 = KDF(lambda, sk_tp, RF)
+    - Decrypt CID_enc with s1 (fallback to CID)
+    - Fetch encrypted secinfo from IPFS and decrypt with s1
+    - Paillier-decrypt RF to get id_hash (evidence)
+    """
+    phc = req.phc or {}
+    try:
+        scid = phc.get("SCID") or {}
+        rf_str = str(scid.get("RF"))
+        rf_int = int(rf_str)
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid_scid_rf")
+    # derive s1
+    s1 = kdf_s1(TP_PAILLIER.private["lambda"], TP_DL_SK, rf_int)
+    # resolve CID
+    cid = phc.get("CID")
+    cid_enc = phc.get("CID_enc")
+    if cid_enc:
+        try:
+            cid = sym_decrypt(s1, str(cid_enc)).decode()
+        except Exception:
+            pass
+    if not cid:
+        raise HTTPException(status_code=400, detail="missing_cid")
+    # fetch and decrypt secinfo
+    enc = ipfs_get(str(cid))
+    if not enc:
+        raise HTTPException(status_code=404, detail="secinfo_not_found")
+    try:
+        pt = sym_decrypt(s1, enc).decode()
+        sec = json.loads(pt)
+    except Exception:
+        raise HTTPException(status_code=400, detail="secinfo_decrypt_failed")
+    # decrypt RF for evidence of ID hash
+    try:
+        id_hash_int = paillier_decrypt(TP_PAILLIER.private, rf_int)
+    except Exception:
+        id_hash_int = None
+    return {
+        "success": True,
+        "did": sec.get("DID"),
+        "id": sec.get("PII", {}).get("id_number"),
+        "pii": sec.get("PII"),
+        "bi": sec.get("BI"),
+        "cid": cid,
+        "evidence": {"id_hash": str(id_hash_int) if id_hash_int is not None else None},
+    }
+class RevealRequest(BaseModel):
+    phc: Dict[str, Any]

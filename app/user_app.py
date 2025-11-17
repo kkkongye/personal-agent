@@ -62,6 +62,10 @@ class RequestUpdateSubmit(BaseModel):
     user_sk: str
     user_pk: str
 
+class RequestReveal(BaseModel):
+    base_url: str
+    phc: Dict[str, Any]
+
 @app.post('/user/request_phc')
 def user_request_phc(req: RequestPHC) -> Dict[str, Any]:
     try:
@@ -316,6 +320,16 @@ def user_update_submit(req: RequestUpdateSubmit) -> Dict[str, Any]:
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+@app.post('/user/reveal')
+def user_reveal(req: RequestReveal) -> Dict[str, Any]:
+    try:
+        import httpx
+        r = httpx.post(req.base_url.rstrip('/') + '/v1/tp/reveal', json={"phc": req.phc}, timeout=15.0)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 @app.get('/user')
 def ui() -> Response:
     html = """
@@ -334,9 +348,9 @@ def ui() -> Response:
       <label>Email</label><input id=email value="alice@example.com">
       <label>Passport</label><input id=passport value="P123456789">
     </div>
-    <button id=issue>Request PHC</button>
+    <button id=issue>1.Request PHC</button>
     <pre id=phc></pre>
-    <button id=fetchcmm disabled>Fetch CMM</button>
+    <button id=fetchcmm disabled>2.Fetch CMM</button>
     <div id=cmm_ui></div>
     <button id=submitcmc disabled>Submit CMM</button>
     <pre id=pa_cmm></pre>
@@ -344,17 +358,19 @@ def ui() -> Response:
     <pre id=hash_cch></pre>
     <pre id=hash_status></pre>
 
-    <button id=createAgent disabled>Create Personal Agent</button>
+    <button id=createAgent disabled>3.Create Personal Agent</button>
     <pre id=agent_out></pre>
-    <button id=recoverpa disabled>Recover PA</button>
-    <pre id=pa_recover></pre>
     <button id=reqpa disabled>Request PA</button>
     <pre id=pa_remote></pre>
-    <button id=updatepa disabled>Update PA</button>
+    <button id=recoverpa disabled>4.Recover PA</button>
+    <pre id=pa_recover></pre>
+    <button id=updatepa disabled>5.Update PA</button>
     <div id=upd_cmm_ui></div>
     <button id=submitUpdate disabled>Submit Update</button>
     <pre id=pa_update></pre>
-
+    
+    <button id=reveal disabled>6.Reveal Identity</button>
+    <pre id=reveal_out></pre>
     <script>
         const tpEl=document.getElementById('tp');
         const apEl=document.getElementById('ap');
@@ -414,6 +430,7 @@ def ui() -> Response:
       hashStatus.textContent = 'verified_ch: ' + String(data.verified_ch_user || false) + ', verified_cch: ' + String(data.verified_cch_user || false);
       const recoverBtn = document.getElementById('recoverpa'); if(recoverBtn) recoverBtn.disabled = false;
       window.__PHC = data.PHC; window.__PA = data.PA;
+      const revealBtn = document.getElementById('reveal'); if(revealBtn) revealBtn.disabled = !(window.__PHC);
       const createBtn = document.getElementById('createAgent');
       if(createBtn){
         createBtn.disabled = !(window.__PHC && window.__PA);
@@ -443,6 +460,14 @@ def ui() -> Response:
             const r=await fetch('/user/recover_pa',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
             const data=await r.json(); paRecover.textContent=JSON.stringify(data,null,2);
         }catch(e){ paRecover.textContent='Recover PA failed: '+(e&&e.message?e.message:'unknown'); }
+        };
+
+        document.getElementById('reveal').onclick = async ()=>{
+        const tpBase = 'http://127.0.0.1:8001';
+        try{
+            const r=await fetch('/user/reveal',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({base_url:tpBase, phc:window.__PHC||phcObj||{}})});
+            const data=await r.json(); const out=document.getElementById('reveal_out'); out.textContent=JSON.stringify(data,null,2);
+        }catch(e){ const out=document.getElementById('reveal_out'); out.textContent='Reveal failed: '+(e&&e.message?e.message:'unknown'); }
         };
 
         document.getElementById('updatepa').onclick = async ()=>{
