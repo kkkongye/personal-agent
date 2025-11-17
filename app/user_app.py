@@ -4,6 +4,10 @@ from typing import Any, Dict
 from user.models import UserInfo, PIIModel, BIModel
 from user.apply_agent import request_phc_remote, request_pa_remote, request_cmm_init, request_cmm_submit
 from trust_provider.crypto import elgamal_decrypt_bytes
+from user.crypto import canonical_json, sha256_hex
+from trust_provider.crypto import compute_af_formal, hcgen_cmi, ch_compute, cch_compute
+from trust_provider.issue_phc import TP_DL_PK
+from agent_provider.ap import AP_PK
 import httpx
 from user.crypto import compute_r_bind, canonical_json, sha256_hex, compute_cmi, dl_generate_user_keypair
 from trust_provider.issue_phc import issue_phc, ASOCompleteModel
@@ -86,7 +90,37 @@ def user_cmm_submit(req: RequestCMMSubmit) -> Dict[str, Any]:
         return out
     raw = elgamal_decrypt_bytes(int(user_sk_int), par).decode()
     import json
-    return json.loads(raw)
+    obj = json.loads(raw)
+    # Verify CMI' = HCGen({CMC}, H(ID)) against PA.APM.CMI
+    calc_cmi_int = hcgen_cmi(req.cmc, req.hid)
+    pa_cmi = ((obj.get("PA") or {}).get("APM") or {}).get("CMI")
+    verified_cmi = (str(calc_cmi_int) == str(pa_cmi))
+    # Verify AF formal: AF ?= H(ID) · pk_ap^CMI' · pk_tp^CRF · g^r_bind''
+    cmi_int = int(str(calc_cmi_int))
+    try:
+        crf_int = int(str(((obj.get("PHC") or {}).get("SCID") or {}).get("RF") or 0))
+    except Exception:
+        crf_int = 0
+    try:
+        rbind2_int = int(str(obj.get("r_bind2") or 0))
+    except Exception:
+        rbind2_int = 0
+    af_calc_user = compute_af_formal(str(req.hid), AP_PK, TP_DL_PK, cmi_int, crf_int, rbind2_int)
+    af_prev = ((obj.get("PHC") or {}).get("ASO") or {}).get("TPM", {}).get("AF")
+    verified_af = (str(af_prev) == str(af_calc_user))
+    # Build PA.MEMORY and encrypt with user's public key (ElGamal)
+    from user.crypto import elgamal_encrypt_bytes as user_elg_enc
+    memory_payload = {
+        "PHC_backup": obj.get("PHC"),
+        "CRF": (obj.get("PHC") or {}).get("SCID", {}).get("RF"),
+        "CMI": str(calc_cmi_int),
+        "r_bind2": obj.get("r_bind2"),
+    }
+    memory_enc = user_elg_enc(int(str(req.user_pk or "0")), memory_payload)
+    obj["verified_cmi"] = verified_cmi
+    obj["verified_af_user"] = verified_af
+    obj["memory_enc"] = memory_enc
+    return obj
 
 @app.get('/user')
 def ui() -> Response:

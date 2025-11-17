@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from typing import Any, Dict, Optional
 
 from .phc import build_phc, verify_phc, phc_to_json
-from .crypto import (
+from crypto_lib import (
     generate_paillier_keypair,
     paillier_decrypt,
     paillier_encrypt,

@@ -2,7 +2,7 @@ from typing import Any, Dict, List
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from datetime import datetime
-from trust_provider.crypto import (
+from crypto_lib import (
     dl_generate_keypair,
     elgamal_decrypt_bytes,
     elgamal_encrypt_bytes as tp_elg_encrypt_bytes,
@@ -11,7 +11,8 @@ from trust_provider.crypto import (
     sha256_hex,
     DL_P,
 )
-from trust_provider.issue_phc import TP_PAILLIER
+from trust_provider.issue_phc import TP_PAILLIER, TP_DL_PK
+from crypto_lib import compute_af_formal, hcgen_cmi, ch_compute, cch_compute
 from trust_provider.crypto import sign_with_secret
 
 router = APIRouter()
@@ -128,15 +129,28 @@ def cmm_submit(payload: CMMSubmitRequest) -> Dict[str, Any]:
     if not isinstance(cmc, list) or not isinstance(hid, str) or not isinstance(phc, dict):
         raise HTTPException(status_code=400, detail="invalid_payload")
 
-    cmi_prime = sha256_hex(canonical_json({"cmc": cmc, "hid": hid}))
-    apm_prime = {"CMI": cmi_prime, "Time": datetime.utcnow().isoformat() + "Z"}
+    cmi_int = hcgen_cmi(cmc, hid)
+    apm_prime = {"CMI": str(cmi_int), "Time": datetime.utcnow().isoformat() + "Z"}
     apid = "ap.example"
     sig = schnorr_sign(AP_SK, canonical_json(apm_prime).encode())
     apa = {"APid": apid, "APproof": {"r": str(sig["r"]), "e": str(sig["e"]), "s": str(sig["s"])}}
     pa = {"APM": apm_prime, "APA": apa}
 
     rb2 = _rand_int()
-    par_obj = {"r_bind2": str(rb2), "PHC": phc, "PA": pa}
+    # CH over (APM', APA, r_ap) — stub: sha256 over canonical
+    r_ap = _rand_int()
+    ch_val = ch_compute(AP_PK, apm_prime, apa, r_ap)
+    # CCH over (AF, CMI, r_bind'') — stub: sha256 over canonical
+    af_prev = phc.get("ASO", {}).get("TPM", {}).get("AF")
+    rf_val = ((phc.get("SCID") or {}).get("RF") if isinstance(phc.get("SCID"), dict) else None)
+    try:
+        crf_int = int(str(rf_val or 0)) % DL_Q
+    except Exception:
+        crf_int = 0
+    af_calc = compute_af_formal(str(hid), AP_PK, TP_DL_PK, cmi_int % DL_Q, crf_int, rb2)
+    verified_af = (str(af_prev) == str(af_calc))
+    cch_val = cch_compute(AP_PK, TP_DL_PK, cmi_int, crf_int, rb2)
+    par_obj = {"r_bind2": str(rb2), "PHC": phc, "PA": pa, "CH": str(ch_val), "CCH": str(cch_val), "verified_af": verified_af}
     try:
         upub = int(str(payload.user_pub))
     except Exception:

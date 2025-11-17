@@ -96,7 +96,7 @@ def request_cmm_submit(base_url: str, cmc: list, hid: str, phc: Dict[str, Any], 
     try:
         pub_resp = httpx.get(base_url.rstrip("/") + "/v1/ap/public_keys", timeout=10.0)
         pub_resp.raise_for_status()
-        ap_dlog_pk = pub_resp.json()["ap_dlog_pk"]
+        ap_dlog_pk = int(str(pub_resp.json()["ap_dlog_pk"]))
     except httpx.HTTPError:
         from agent_provider.ap import AP_PK as ap_dlog_pk
     obj = {"CMC": cmc, "HID": hid, "PHC": phc}
@@ -108,5 +108,5 @@ def request_cmm_submit(base_url: str, cmc: list, hid: str, phc: Dict[str, Any], 
 
 
 def _elg_decrypt(sk: int, c: Dict[str, Any]) -> bytes:
-    from trust_provider.crypto import elgamal_decrypt_bytes
+    from crypto_lib import elgamal_decrypt_bytes
     return elgamal_decrypt_bytes(sk, c)

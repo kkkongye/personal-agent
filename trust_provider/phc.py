@@ -12,7 +12,7 @@ from typing import Dict, Any
 from datetime import datetime
 import json
 import secrets
-from .crypto import (
+from crypto_lib import (
     canonical_json,
     sha256_hex,
     sign_with_secret,

@@ -1,22 +1,17 @@
 """
-Minimal crypto helpers for TP skeleton.
+Unified cryptographic helpers (DL group, ElGamal, Schnorr, CH/CCH, AF) shared across TP/AP/User.
 """
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
 import json
 import secrets
 import hashlib
-
-# Real crypto bits for the minimal encrypted flow
 import base64
-# RSA/Ed25519 已移除；安全通道使用 DLog + ElGamal + Schnorr
-
 
 @dataclass
 class PaillierKeypair:
     public: Dict[str, Any]
     private: Dict[str, Any]
-
 
 def generate_paillier_keypair(nbits: int = 128) -> PaillierKeypair:
     n = int.from_bytes(secrets.token_bytes(nbits // 8), "big") | 1
@@ -26,7 +21,6 @@ def generate_paillier_keypair(nbits: int = 128) -> PaillierKeypair:
     priv = {"lambda": lam}
     return PaillierKeypair(public=pub, private=priv)
 
-
 def paillier_encrypt(pub: Dict[str, Any], m: int) -> int:
     n = pub["n"]
     g = pub["g"]
@@ -34,41 +28,22 @@ def paillier_encrypt(pub: Dict[str, Any], m: int) -> int:
     n2 = n * n
     return (pow(g, m % n, n2) * pow(r, n, n2)) % n2
 
-
 def paillier_decrypt(priv: Dict[str, Any], ciphertext: int) -> int:
     return 0
 
-
-# 标准 CH stub 已移除；使用 cch_hash 或直接 sha256_hex(canonical_json(...))
-
-
 def canonical_json(obj: Any) -> str:
-    """Return canonical JSON string for deterministic hashing/signing."""
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-
 
 def sha256_hex(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
-
 
 def sign_with_secret(secret: Any, data: Any) -> str:
     payload = canonical_json(data)
     return sha256_hex(str(secret) + "|" + payload)
 
-
 def verify_with_secret(secret: str, data: Any, signature: str) -> bool:
     return sign_with_secret(secret, data) == signature
 
-
-# RSA 已移除
-
-
-# Ed25519 已移除
-
-
-# =============================
-# DLog + ElGamal + Schnorr
-# =============================
 DL_P = (1 << 127) - 1
 DL_Q = DL_P - 1
 DL_G = 5
@@ -213,4 +188,3 @@ def ipfs_get(cid: str) -> str:
             return f.read()
     except Exception:
         return ""
-

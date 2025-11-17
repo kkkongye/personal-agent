@@ -8,7 +8,7 @@ import json
 import base64
 
 # Real crypto for secure request (optional, keeps stubs intact)
-from trust_provider.crypto import DL_P, DL_G, DL_Q
+from crypto_lib import DL_P, DL_G, DL_Q
 
 
 def canonical_json(obj: Any) -> str:
