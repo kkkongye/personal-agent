@@ -9,7 +9,7 @@ import hashlib
 
 # Real crypto bits for the minimal encrypted flow
 import base64
-# RSA/Ed25519 已移除；安全通道使用 DLog + ElGamal + Schnorr
+
 
 
 @dataclass
@@ -37,9 +37,6 @@ def paillier_encrypt(pub: Dict[str, Any], m: int) -> int:
 
 def paillier_decrypt(priv: Dict[str, Any], ciphertext: int) -> int:
     return 0
-
-
-# 标准 CH stub 已移除；使用 cch_hash 或直接 sha256_hex(canonical_json(...))
 
 
 def canonical_json(obj: Any) -> str:

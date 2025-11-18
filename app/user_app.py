@@ -360,8 +360,6 @@ def ui() -> Response:
 
     <button id=createAgent disabled>3.Create Personal Agent</button>
     <pre id=agent_out></pre>
-    <button id=reqpa disabled>Request PA</button>
-    <pre id=pa_remote></pre>
     <button id=recoverpa disabled>4.Recover PA</button>
     <pre id=pa_recover></pre>
     <button id=updatepa disabled>5.Update PA</button>
@@ -385,7 +383,6 @@ def ui() -> Response:
     const hashCCH=document.getElementById('hash_cch');
     const hashStatus=document.getElementById('hash_status');
         const paRecover=document.getElementById('pa_recover');
-        const paRemote=document.getElementById('pa_remote');
     const cmmUI=document.getElementById('cmm_ui');
         let phcObj=null;
         let cmmObj=null;
@@ -397,7 +394,7 @@ def ui() -> Response:
         const payload={base_url:tpBase,user};
         try{
             const r=await fetch('/user/request_phc',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
-            const data=await r.json(); phcObj=data.phc; phcPre.textContent=JSON.stringify(data,null,2); document.getElementById('fetchcmm').disabled=!phcObj; document.getElementById('reqpa').disabled=!phcObj; document.getElementById('recoverpa').disabled=!phcObj; const updBtn=document.getElementById('updatepa'); if(updBtn) updBtn.disabled=!phcObj;
+            const data=await r.json(); phcObj=data.phc; phcPre.textContent=JSON.stringify(data,null,2); document.getElementById('fetchcmm').disabled=!phcObj; document.getElementById('recoverpa').disabled=!phcObj; const updBtn=document.getElementById('updatepa'); if(updBtn) updBtn.disabled=!phcObj;
         }catch(e){ phcPre.textContent='Request PHC failed: '+(e&&e.message?e.message:'unknown'); }
         };
 
@@ -442,15 +439,7 @@ def ui() -> Response:
       }
         };
         
-        document.getElementById('reqpa').onclick = async ()=>{
-        const apBase = apEl && apEl.value ? apEl.value : 'http://127.0.0.1:8002';
-        const user={pii:{name:name.value,id_number:idnum.value,id_card_number:(idcard?idcard.value:''),email:email.value},bi:{last_login_ip:'127.0.0.1',passport_number:(passport?passport.value:'')},cdid:'cdid:user.placeholder',ecid:'g'};
-        const payload={base_url:apBase, phc:phcObj, user};
-        try{
-            const r=await fetch('/user/request_pa',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
-            const data=await r.json(); paRemote.textContent=JSON.stringify(data,null,2);
-        }catch(e){ paRemote.textContent='Request PA failed: '+(e&&e.message?e.message:'unknown'); }
-        };
+
 
         document.getElementById('recoverpa').onclick = async ()=>{
         const apBase = apEl && apEl.value ? apEl.value : 'http://127.0.0.1:8002';
