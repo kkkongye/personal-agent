@@ -7,29 +7,91 @@ import json
 import secrets
 import hashlib
 import base64
+from math import gcd
 
 @dataclass
 class PaillierKeypair:
     public: Dict[str, Any]
     private: Dict[str, Any]
 
-def generate_paillier_keypair(nbits: int = 128) -> PaillierKeypair:
-    n = int.from_bytes(secrets.token_bytes(nbits // 8), "big") | 1
+def _rand_odd(nbits: int) -> int:
+    x = secrets.randbits(nbits)
+    x |= 1
+    x |= (1 << (nbits - 1))
+    return x
+
+def _is_probable_prime(n: int, k: int = 16) -> bool:
+    if n < 2:
+        return False
+    small = [2, 3, 5, 7, 11, 13, 17, 19, 23]
+    for p in small:
+        if n % p == 0:
+            return n == p
+    d = n - 1
+    s = 0
+    while d % 2 == 0:
+        d //= 2
+        s += 1
+    for _ in range(k):
+        a = secrets.randbelow(n - 3) + 2
+        x = pow(a, d, n)
+        if x == 1 or x == n - 1:
+            continue
+        skip = False
+        for _ in range(s - 1):
+            x = (x * x) % n
+            if x == n - 1:
+                skip = True
+                break
+        if skip:
+            continue
+        return False
+    return True
+
+def _gen_prime(nbits: int) -> int:
+    while True:
+        x = _rand_odd(nbits)
+        if _is_probable_prime(x):
+            return x
+
+def _lcm(a: int, b: int) -> int:
+    return a // gcd(a, b) * b
+
+def generate_paillier_keypair(nbits: int = 256) -> PaillierKeypair:
+    p = _gen_prime(nbits)
+    q = _gen_prime(nbits)
+    while p == q:
+        q = _gen_prime(nbits)
+    n = p * q
+    n2 = n * n
     g = n + 1
-    lam = int.from_bytes(secrets.token_bytes(nbits // 8), "big") | 1
+    lam = _lcm(p - 1, q - 1)
+    u = pow(g, lam, n2)
+    L = (u - 1) // n
+    mu = inv_mod(L % n, n)
     pub = {"n": n, "g": g}
-    priv = {"lambda": lam}
+    priv = {"lambda": lam, "mu": mu, "n": n}
     return PaillierKeypair(public=pub, private=priv)
 
 def paillier_encrypt(pub: Dict[str, Any], m: int) -> int:
-    n = pub["n"]
-    g = pub["g"]
-    r = int.from_bytes(secrets.token_bytes(16), "big") % n or 1
+    n = int(pub["n"])
+    g = int(pub["g"])
     n2 = n * n
-    return (pow(g, m % n, n2) * pow(r, n, n2)) % n2
+    m = m % n
+    while True:
+        r = secrets.randbelow(n - 1) + 1
+        if gcd(r, n) == 1:
+            break
+    return (pow(g, m, n2) * pow(r, n, n2)) % n2
 
 def paillier_decrypt(priv: Dict[str, Any], ciphertext: int) -> int:
-    return 0
+    n = int(priv.get("n"))
+    lam = int(priv.get("lambda"))
+    mu = int(priv.get("mu"))
+    n2 = n * n
+    u = pow(int(ciphertext), lam, n2)
+    L = (u - 1) // n
+    return (L * mu) % n
 
 def canonical_json(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"), sort_keys=True)

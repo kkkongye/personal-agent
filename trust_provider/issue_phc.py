@@ -21,12 +21,10 @@ from typing import Any, Dict, Optional
 
 from .phc import build_phc, verify_phc, phc_to_json
 from crypto_lib import (
-    generate_paillier_keypair,
     paillier_decrypt,
     paillier_encrypt,
     sign_with_secret,
     canonical_json,
-    dl_generate_keypair,
     elgamal_decrypt_bytes,
     schnorr_sign,
     schnorr_verify,
@@ -40,6 +38,7 @@ from crypto_lib import (
     ipfs_get,
     crf_encrypt,
 )
+from crypto_lib.keys import TP_PAILLIER, TP_DL_SK, TP_DL_PK, AP_SK, AP_PK
 import base64
 import json
 import logging
@@ -93,10 +92,7 @@ class SecureInbound(BaseModel):
     sig: Dict[str, int]
 
 
-# Create a simple in-memory keypair for TP (demo only)
-TP_PAILLIER = generate_paillier_keypair()
-TP_DL_SK, TP_DL_PK = dl_generate_keypair()
-AP_DL_SK, AP_DL_PK = dl_generate_keypair()
+# Keys are provided by shared module
 
 
 @router.post("/tp/issue_phc")
@@ -148,13 +144,13 @@ def issue_phc(aso: ASOCompleteModel) -> Dict[str, Any]:
     tpa = {"TPid": tpid, "TPproof": {"r": str(tpproof_sig["r"]), "e": str(tpproof_sig["e"]), "s": str(tpproof_sig["s"])}}
 
     # 3) APA: use AP public key as APid
-    apid = str(AP_DL_PK)
-    approof_sig = schnorr_sign(AP_DL_SK, canonical_json({"APM": apm, "APid": apid}).encode())
+    apid = str(AP_PK)
+    approof_sig = schnorr_sign(AP_SK, canonical_json({"APM": apm, "APid": apid}).encode())
     apa = {"APid": apid, "APproof": {"r": str(approof_sig["r"]), "e": str(approof_sig["e"]), "s": str(approof_sig["s"])}}
 
     # 4) Build PHC with PROOF fields (use formal CH for TPCH/APCH)
     # Attach SCID when available (legacy path uses RF=0)
-    phc = build_phc(aso=aso_built, tpa=tpa, apa=apa, tp_sk=TP_DL_SK, tp_pk=TP_DL_PK, ap_pk=AP_DL_PK)
+    phc = build_phc(aso=aso_built, tpa=tpa, apa=apa, tp_sk=TP_DL_SK, tp_pk=TP_DL_PK, ap_pk=AP_PK)
     phc.setdefault("SCID", {"AF": tpm.get("AF"), "RF": scid_rf})
 
     return {"success": True, "phc": phc}
@@ -164,7 +160,7 @@ def issue_phc(aso: ASOCompleteModel) -> Dict[str, Any]:
 def get_public_keys() -> Dict[str, Any]:
     return {
         "tp_dlog_pk": str(TP_DL_PK),
-        "ap_dlog_pk": str(AP_DL_PK),
+        "ap_dlog_pk": str(AP_PK),
         "dl_params": {"p": str(DL_P), "g": str(5)},
         "paillier_pub": {"n": str(TP_PAILLIER.public.get("n")), "g": str(TP_PAILLIER.public.get("g"))},
     }
@@ -202,12 +198,12 @@ def issue_phc_secure(payload: SecureInbound) -> Dict[str, Any]:
     tpm = {"Time": datetime.utcnow().isoformat() + "Z", "CDID": did, "AF": str(af_recv), "ECID": "g"}
     apm = {"Time": datetime.utcnow().isoformat() + "Z", "CMI": "0"}
     tpid = str(TP_DL_PK)
-    apid = str(AP_DL_PK)
+    apid = str(AP_PK)
     tpproof_sig = schnorr_sign(TP_DL_SK, canonical_json({"TPM": tpm, "TPid": tpid}).encode())
-    approof_sig = schnorr_sign(AP_DL_SK, canonical_json({"APM": apm, "APid": apid}).encode())
+    approof_sig = schnorr_sign(AP_SK, canonical_json({"APM": apm, "APid": apid}).encode())
     tpa = {"TPid": tpid, "TPproof": {"r": str(tpproof_sig["r"]), "e": str(tpproof_sig["e"]), "s": str(tpproof_sig["s"])}}
     apa = {"APid": apid, "APproof": {"r": str(approof_sig["r"]), "e": str(approof_sig["e"]), "s": str(approof_sig["s"])}}
-    phc = build_phc(aso={"TPM": tpm, "APM": apm}, tpa=tpa, apa=apa, tp_sk=TP_DL_SK, tp_pk=TP_DL_PK, ap_pk=AP_DL_PK)
+    phc = build_phc(aso={"TPM": tpm, "APM": apm}, tpa=tpa, apa=apa, tp_sk=TP_DL_SK, tp_pk=TP_DL_PK, ap_pk=AP_PK)
     phc["SCID"] = scid
     phc["DID"] = did
     # Store secured info

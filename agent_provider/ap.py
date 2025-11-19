@@ -5,7 +5,6 @@ from datetime import datetime
 import json
 import logging
 from crypto_lib import (
-    dl_generate_keypair,
     elgamal_decrypt_bytes,
     elgamal_encrypt_bytes as tp_elg_encrypt_bytes,
     schnorr_sign,
@@ -16,14 +15,14 @@ from crypto_lib import (
     hash_to_int,
     inv_mod,
 )
-from trust_provider.issue_phc import TP_PAILLIER, TP_DL_PK
+from crypto_lib.keys import AP_SK, AP_PK, TP_PAILLIER, TP_DL_PK
 from crypto_lib import compute_af_formal, hcgen_cmi, ch_compute, cch_compute
 from trust_provider.crypto import sign_with_secret
 
 router = APIRouter()
 log = logging.getLogger("ap")
 
-AP_SK, AP_PK = dl_generate_keypair()
+# Keys provided by shared module
 
 
 class APInbound(BaseModel):

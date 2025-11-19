@@ -16,7 +16,8 @@ def local_issue(user: UserInfo, user_secret: str = "user_secret") -> Dict[str, A
     Maps AF/CMI into TP's fallback payload (af, cmi, cdid, ecid).
     Returns {af_result, phc_response}
     """
-    from trust_provider.issue_phc import issue_phc, ASOCompleteModel, AP_DL_PK, TP_DL_PK
+    from trust_provider.issue_phc import issue_phc, ASOCompleteModel
+    from crypto_lib.keys import AP_PK as AP_DL_PK, TP_DL_PK
 
     r_bind = compute_r_bind()
     pii = user.pii.model_dump()
