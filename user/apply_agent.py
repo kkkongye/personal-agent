@@ -242,3 +242,37 @@ def request_cmm_submit(base_url: str, cmc: list, hid: str, phc: Dict[str, Any], 
 def _elg_decrypt(sk: int, c: Dict[str, Any]) -> bytes:
     from crypto_lib import elgamal_decrypt_bytes
     return elgamal_decrypt_bytes(sk, c)
+def request_phc_recover(base_url: str, user: UserInfo) -> Dict[str, Any]:
+    try:
+        pub_resp = httpx.get(base_url.rstrip("/") + "/v1/tp/public_keys", timeout=10.0)
+        pub_resp.raise_for_status()
+        tp_keys = pub_resp.json()
+        tp_dlog_pk = int(str(tp_keys["tp_dlog_pk"]))
+    except httpx.HTTPError:
+        from trust_provider.issue_phc import get_public_keys
+        tp_keys = get_public_keys()
+        tp_dlog_pk = int(str(tp_keys["tp_dlog_pk"]))
+    sk_a, pk_a = dl_generate_user_keypair()
+    pii = user.pii.model_dump()
+    bi = user.bi.model_dump()
+    pt = {"PII": pii, "BI": bi, "ID": pii.get("id_number")}
+    rec = elgamal_encrypt_bytes(tp_dlog_pk, pt)
+    url = base_url.rstrip("/") + "/v1/tp/recover_phc"
+    try:
+        resp = httpx.post(url, json={"rec": rec, "user_pub": pk_a}, timeout=15.0)
+        resp.raise_for_status()
+        data = resp.json()
+        phc_enc = data.get("phc_enc")
+        if not phc_enc:
+            return data
+        raw = _elg_decrypt(sk_a, phc_enc)
+        return json.loads(raw.decode())
+    except httpx.HTTPError:
+        try:
+            from trust_provider.issue_phc import recover_phc, RecoverPHCInbound
+            out = recover_phc(RecoverPHCInbound(rec=rec, user_pub=pk_a))
+            phc_enc = out.get("phc_enc")
+            raw = _elg_decrypt(sk_a, phc_enc)
+            return json.loads(raw.decode())
+        except Exception as e:
+            return {"success": False, "error": str(e)}

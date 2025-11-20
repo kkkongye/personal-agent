@@ -66,6 +66,11 @@ class RequestReveal(BaseModel):
     base_url: str
     phc: Dict[str, Any]
 
+class RecoverBothRequest(BaseModel):
+    tp_base: str
+    ap_base: str
+    user: UserInfo
+
 @app.post('/user/request_phc')
 def user_request_phc(req: RequestPHC) -> Dict[str, Any]:
     try:
@@ -78,6 +83,37 @@ def user_request_phc(req: RequestPHC) -> Dict[str, Any]:
         payload = ASOCompleteModel(af=af, cmi=cmi, cdid=req.user.cdid, ecid=req.user.ecid)
         data = issue_phc(payload)
         return data
+
+@app.post('/user/recover_phc')
+def user_recover_phc(req: RequestPHC) -> Dict[str, Any]:
+    from user.apply_agent import request_phc_recover
+    from crypto_lib import schnorr_verify, canonical_json
+    out = request_phc_recover(req.base_url, req.user)
+    phc = out.get('PHC') or out.get('phc') or {}
+    tpa = phc.get('TPA') or {}
+    tpm = (phc.get('ASO') or {}).get('TPM') or {}
+    sig = tpa.get('TPproof') or {}
+    tpid = tpa.get('TPid')
+    try:
+        ok = bool(schnorr_verify(int(str(tpid)), canonical_json({'TPM': tpm, 'TPid': tpid}).encode(), {'r': int(str(sig.get('r') or 0)), 'e': int(str(sig.get('e') or 0)), 's': int(str(sig.get('s') or 0))}))
+    except Exception:
+        ok = False
+    hid = sha256_hex(req.user.pii.id_number)
+    return {'success': True, 'phc': phc, 'verified_tp': ok, 'identity': {'hid': hid, 'pii': req.user.pii.model_dump(), 'bi': req.user.bi.model_dump()}}
+
+@app.post('/user/recover_both')
+def user_recover_both(req: RecoverBothRequest) -> Dict[str, Any]:
+    from user.apply_agent import request_phc_recover
+    try:
+        hid = sha256_hex(req.user.pii.id_number)
+        phc_obj = request_phc_recover(req.tp_base, req.user)
+        phc = phc_obj.get('PHC') or phc_obj.get('phc') or {}
+        if not phc:
+            return {"success": False, "error": "phc_recover_failed", "detail": phc_obj, "identity": {"hid": hid, "pii": req.user.pii.model_dump(), "bi": req.user.bi.model_dump()}}
+        pa_obj = request_pa_recover(req.ap_base, phc, req.user)
+        return {"success": True, "phc": phc, "pa": pa_obj, "identity": {"hid": hid, "pii": req.user.pii.model_dump(), "bi": req.user.bi.model_dump()}}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 @app.post('/user/request_pa')
 def user_request_pa(req: RequestPA) -> Dict[str, Any]:
@@ -386,7 +422,8 @@ def ui() -> Response:
 
     <button id=createAgent disabled>3.Create Personal Agent</button>
     <pre id=agent_out></pre>
-    <button id=recoverpa disabled>4.Recover PA</button>
+    <button id=recoverpa disabled>4.PA丢失，恢复PA</button>
+    <button id=recoverboth>PHC与PA都丢失，恢复PA</button>
     <pre id=pa_recover></pre>
     <button id=updatepa disabled>5.Update PA</button>
     <div id=upd_cmm_ui></div>
@@ -475,6 +512,17 @@ def ui() -> Response:
             const r=await fetch('/user/recover_pa',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
             const data=await r.json(); paRecover.textContent=JSON.stringify(data,null,2);
         }catch(e){ paRecover.textContent='Recover PA failed: '+(e&&e.message?e.message:'unknown'); }
+        };
+
+        document.getElementById('recoverboth').onclick = async ()=>{
+        const tpBase = 'http://127.0.0.1:8001';
+        const apBase = 'http://127.0.0.1:8002';
+        const user={pii:{name:name.value,id_number:idnum.value,id_card_number:(idcard?idcard.value:''),email:email.value},bi:{last_login_ip:'127.0.0.1',passport_number:(passport?passport.value:'')},cdid:'cdid:user.placeholder',ecid:'g'};
+        try{
+            const r=await fetch('/user/recover_both',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({tp_base:tpBase, ap_base:apBase, user})});
+            const data=await r.json(); paRecover.textContent=JSON.stringify(data,null,2);
+            window.__PHC = data.phc || null;
+        }catch(e){ paRecover.textContent='Recover Both failed: '+(e&&e.message?e.message:'unknown'); }
         };
 
         document.getElementById('reveal').onclick = async ()=>{
