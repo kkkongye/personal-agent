@@ -62,9 +62,7 @@ class RequestUpdateSubmit(BaseModel):
     user_sk: str
     user_pk: str
 
-class RequestReveal(BaseModel):
-    base_url: str
-    phc: Dict[str, Any]
+
 
 class RecoverBothRequest(BaseModel):
     tp_base: str
@@ -382,15 +380,7 @@ def user_update_submit(req: RequestUpdateSubmit) -> Dict[str, Any]:
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-@app.post('/user/reveal')
-def user_reveal(req: RequestReveal) -> Dict[str, Any]:
-    try:
-        import httpx
-        r = httpx.post(req.base_url.rstrip('/') + '/v1/tp/reveal', json={"phc": req.phc}, timeout=15.0)
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+
 
 @app.get('/user')
 def ui() -> Response:
@@ -430,8 +420,7 @@ def ui() -> Response:
     <button id=submitUpdate disabled>Submit Update</button>
     <pre id=pa_update></pre>
     
-    <button id=reveal disabled>6.Reveal Identity</button>
-    <pre id=reveal_out></pre>
+    
     <script>
         const tpEl=document.getElementById('tp');
         const apEl=document.getElementById('ap');
@@ -457,7 +446,7 @@ def ui() -> Response:
         const payload={base_url:tpBase,user};
         try{
             const r=await fetch('/user/request_phc',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
-            const data=await r.json(); phcObj=data.phc; phcPre.textContent=JSON.stringify(data,null,2); document.getElementById('fetchcmm').disabled=!phcObj; document.getElementById('recoverpa').disabled=!phcObj; const updBtn=document.getElementById('updatepa'); if(updBtn) updBtn.disabled=!phcObj;
+            const data=await r.json(); phcObj = data.phc || data.PHC || null; phcPre.textContent=JSON.stringify(data,null,2); document.getElementById('fetchcmm').disabled=!phcObj; document.getElementById('recoverpa').disabled=!phcObj; const updBtn=document.getElementById('updatepa'); if(updBtn) updBtn.disabled=!phcObj;
         }catch(e){ phcPre.textContent='Request PHC failed: '+(e&&e.message?e.message:'unknown'); }
         };
 
@@ -525,23 +514,30 @@ def ui() -> Response:
         }catch(e){ paRecover.textContent='Recover Both failed: '+(e&&e.message?e.message:'unknown'); }
         };
 
-        document.getElementById('reveal').onclick = async ()=>{
-        const tpBase = 'http://127.0.0.1:8001';
-        try{
-            const r=await fetch('/user/reveal',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({base_url:tpBase, phc:window.__PHC||phcObj||{}})});
-            const data=await r.json(); const out=document.getElementById('reveal_out'); out.textContent=JSON.stringify(data,null,2);
-        }catch(e){ const out=document.getElementById('reveal_out'); out.textContent='Reveal failed: '+(e&&e.message?e.message:'unknown'); }
-        };
+        const revealEl = document.getElementById('reveal');
+        if (revealEl) {
+          revealEl.onclick = async ()=>{
+            const tpBase = 'http://127.0.0.1:8001';
+            try{
+                const r=await fetch('/user/reveal',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({base_url:tpBase, phc:window.__PHC||phcObj||{}})});
+                const data=await r.json(); const out=document.getElementById('reveal_out'); if(out) out.textContent=JSON.stringify(data,null,2);
+            }catch(e){ const out=document.getElementById('reveal_out'); if(out) out.textContent='Reveal failed: '+(e&&e.message?e.message:'unknown'); }
+          };
+        }
 
         document.getElementById('updatepa').onclick = async ()=>{
         const apBase = apEl && apEl.value ? apEl.value : 'http://127.0.0.1:8002';
         const user={pii:{name:name.value,id_number:idnum.value,id_card_number:(idcard?idcard.value:''),email:email.value},bi:{last_login_ip:'127.0.0.1',passport_number:(passport?passport.value:'')},cdid:'cdid:user.placeholder',ecid:'g'};
-        const r=await fetch('/user/update_init',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({base_url:apBase, phc:phcObj, user})});
-        const data=await r.json(); const cmm=data.cmm; window.__updSk=String(data.sk||""); window.__updPk=String(data.pk||""); window.__lastCMM=cmm;
-        const updUI=document.getElementById('upd_cmm_ui');
-        const htmlRows=(cmm||[]).map((row,i)=>{ const opts=row.map((opt,j)=>`<label><input type=radio name=\"upd_row_${i}\" value='${j}' ${j===0?"checked":""}>${opt.label}</label>`).join(' '); return `<div>Update Row ${i+1}: ${opts}</div>`; }).join('');
-        updUI.innerHTML = htmlRows;
-        document.getElementById('submitUpdate').disabled = !((cmm && cmm.length>0) && (window.__updSk && window.__updPk));
+        const out=document.getElementById('pa_update');
+        if(!phcObj){ out.textContent='请先点击 1.Request PHC'; return; }
+        try{
+          const r=await fetch('/user/update_init',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({base_url:apBase, phc:phcObj, user})});
+          const data=await r.json(); const cmm=data.cmm; window.__updSk=String(data.sk||""); window.__updPk=String(data.pk||""); window.__lastCMM=cmm;
+          const updUI=document.getElementById('upd_cmm_ui');
+          const htmlRows=(cmm||[]).map((row,i)=>{ const opts=row.map((opt,j)=>`<label><input type=radio name=\"upd_row_${i}\" value='${j}' ${j===0?"checked":""}>${opt.label}</label>`).join(' '); return `<div>Update Row ${i+1}: ${opts}</div>`; }).join('');
+          updUI.innerHTML = htmlRows;
+          document.getElementById('submitUpdate').disabled = !((cmm && cmm.length>0) && (window.__updSk && window.__updPk));
+        }catch(e){ out.textContent='Update PA failed: '+(e&&e.message?e.message:'unknown'); }
         };
 
         document.getElementById('submitUpdate').onclick = async ()=>{

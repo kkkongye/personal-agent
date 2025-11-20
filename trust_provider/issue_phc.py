@@ -82,8 +82,8 @@ class PHCModel(BaseModel):
 class TraceRequest(BaseModel):
     rf_ciphertext: str
 
-class RevealRequest(BaseModel):
-    phc: Dict[str, Any]
+class RevealByDidRequest(BaseModel):
+    did: str
 
 
 class SecureInbound(BaseModel):
@@ -250,16 +250,21 @@ def trace_identity(req: TraceRequest) -> Dict[str, Any]:
 
 
 @router.post("/tp/reveal")
-def reveal_identity(req: RevealRequest) -> Dict[str, Any]:
-    """Reveal user identity from PHC using RF and CID.
+def reveal_identity(req: RevealByDidRequest) -> Dict[str, Any]:
+    """Reveal user identity from PHC using DID.
 
     Steps:
+    - Find PHC by DID in local storage
     - Derive s1 = KDF(lambda, sk_tp, RF)
     - Decrypt CID_enc with s1 (fallback to CID)
     - Fetch encrypted secinfo from IPFS and decrypt with s1
     - Paillier-decrypt RF to get id_hash (evidence)
     """
-    phc = req.phc or {}
+    db_rec = _find_phc_by_did(req.did)
+    if not db_rec:
+        raise HTTPException(status_code=404, detail="did_not_found")
+
+    phc = db_rec.get("phc") or {}
     try:
         scid = phc.get("SCID") or {}
         rf_str = str(scid.get("RF"))
@@ -331,6 +336,18 @@ def _tpdb_get(hid: str) -> Dict[str, Any] | None:
             return json.load(f)
     except Exception:
         return None
+
+def _find_phc_by_did(did: str) -> Dict[str, Any] | None:
+    import os
+    root = _tpdb_root()
+    for fname in os.listdir(root):
+        if not fname.endswith('.json'):
+            continue
+        hid = fname.split('.')[0]
+        data = _tpdb_get(hid)
+        if data and data.get('phc', {}).get('DID') == did:
+            return data
+    return None
 @router.post("/tp/recover_phc")
 def recover_phc(payload: RecoverPHCInbound) -> Dict[str, Any]:
     try:
