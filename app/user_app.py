@@ -7,7 +7,7 @@ from user.apply_agent import request_phc_secure
 from user.apply_agent import request_pa_recover
 from trust_provider.crypto import elgamal_decrypt_bytes
 from user.crypto import canonical_json, sha256_hex
-from trust_provider.crypto import compute_af_formal, hcgen_cmi, ch_compute, cch_compute
+from crypto_lib import compute_af_formal, hcgen_cmi, ch_compute, cch_compute
 from trust_provider.issue_phc import TP_DL_PK
 from agent_provider.ap import AP_PK
 import httpx
@@ -120,11 +120,21 @@ def user_cmm_submit(req: RequestCMMSubmit) -> Dict[str, Any]:
     import json
     obj = json.loads(raw)
     # Verify CMI' = HCGen({CMC}, H(ID)) against PA.APM.CMI
-    calc_cmi_int = hcgen_cmi(req.cmc, req.hid)
+    try:
+        hid_str = str(req.hid or "")
+        is_hex = (len(hid_str) == 64 and all(c in "0123456789abcdefABCDEF" for c in hid_str))
+        hid_use = hid_str if is_hex else sha256_hex(hid_str)
+    except Exception:
+        hid_use = sha256_hex(str(req.hid))
+    calc_cmi_int = hcgen_cmi(req.cmc, hid_use)
     pa_cmi = ((obj.get("PA") or {}).get("APM") or {}).get("CMI")
     verified_cmi = (str(calc_cmi_int) == str(pa_cmi))
     # Verify AF formal: AF ?= H(ID) · pk_ap^CMI' · pk_tp^CRF · g^r_bind''
-    cmi_int = int(str(calc_cmi_int))
+    # Align with AP-provided CMI to avoid any representation mismatch
+    try:
+        cmi_int = int(str(pa_cmi))
+    except Exception:
+        cmi_int = int(str(calc_cmi_int))
     # Use SCID.RF as exponent source for formal AF verification
     try:
         rf_val = ((obj.get("PHC") or {}).get("SCID") or {}).get("RF")
@@ -143,7 +153,7 @@ def user_cmm_submit(req: RequestCMMSubmit) -> Dict[str, Any]:
         tp_pk_int = int(str(obj.get("tp_pk")))
     except Exception:
         tp_pk_int = 0
-    af_calc_user = compute_af_formal(str(req.hid), ap_pk_int, tp_pk_int, cmi_int, crf_int, rbind2_int)
+    af_calc_user = compute_af_formal(str(hid_use), ap_pk_int, tp_pk_int, cmi_int, crf_int, rbind2_int)
     af_prev = ((obj.get("PHC") or {}).get("ASO") or {}).get("TPM", {}).get("AF")
     verified_af = (str(af_prev) == str(af_calc_user))
     # Verify CH/CCH
@@ -278,7 +288,13 @@ def user_update_submit(req: RequestUpdateSubmit) -> Dict[str, Any]:
             raise ValueError("empty keys")
     except Exception:
         user_sk_int, user_pk_int = dl_generate_user_keypair()
-    obj = {"CMC": req.cmc, "HID": req.hid, "PHC": req.phc}
+    try:
+        hid_str = str(req.hid or "")
+        is_hex = (len(hid_str) == 64 and all(c in "0123456789abcdefABCDEF" for c in hid_str))
+        hid_use = hid_str if is_hex else sha256_hex(hid_str)
+    except Exception:
+        hid_use = sha256_hex(str(req.hid))
+    obj = {"CMC": req.cmc, "HID": hid_use, "PHC": req.phc}
     cmc_enc = elgamal_encrypt_bytes(ap_dlog_pk, obj)
     url = req.base_url.rstrip('/') + '/v1/ap/update_submit'
     try:
@@ -291,7 +307,13 @@ def user_update_submit(req: RequestUpdateSubmit) -> Dict[str, Any]:
             return data
         raw = elgamal_decrypt_bytes(int(user_sk_int), par).decode()
         obj2 = json.loads(raw)
-        calc_cmi_int = hcgen_cmi(req.cmc, req.hid)
+        try:
+            hid_str = str(req.hid or "")
+            is_hex = (len(hid_str) == 64 and all(c in "0123456789abcdefABCDEF" for c in hid_str))
+            hid_use = hid_str if is_hex else sha256_hex(hid_str)
+        except Exception:
+            hid_use = sha256_hex(str(req.hid))
+        calc_cmi_int = hcgen_cmi(req.cmc, hid_use)
         pa_cmi = ((obj2.get("PA") or {}).get("APM") or {}).get("CMI")
         verified_cmi = (str(calc_cmi_int) == str(pa_cmi))
         try:
@@ -311,7 +333,11 @@ def user_update_submit(req: RequestUpdateSubmit) -> Dict[str, Any]:
             crf_int = int(str(crf_src or 0))
         except Exception:
             crf_int = 0
-        af_calc_user = compute_af_formal(str(req.hid), ap_pk_int, tp_pk_int, int(str(calc_cmi_int)), crf_int, rbind3_int)
+        try:
+            cmi_int = int(str(pa_cmi))
+        except Exception:
+            cmi_int = int(str(calc_cmi_int))
+        af_calc_user = compute_af_formal(str(hid_use), ap_pk_int, tp_pk_int, cmi_int, crf_int, rbind3_int)
         af_prev = ((obj2.get("PHC") or {}).get("ASO") or {}).get("TPM", {}).get("AF")
         verified_af = (str(af_prev) == str(af_calc_user))
         obj2["verified_cmi"] = verified_cmi

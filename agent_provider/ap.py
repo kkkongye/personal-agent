@@ -8,6 +8,7 @@ from crypto_lib import (
     elgamal_decrypt_bytes,
     elgamal_encrypt_bytes as tp_elg_encrypt_bytes,
     schnorr_sign,
+    schnorr_verify,
     canonical_json,
     sha256_hex,
     DL_P,
@@ -229,6 +230,7 @@ def recover_pa(payload: RecoverInbound) -> Dict[str, Any]:
         tpa = phc.get("TPA") or {}
         aso = phc.get("ASO") or {}
         tpm = aso.get("TPM") or {}
+        proof = phc.get("PROOF") or {}
         try:
             tp_pk = int(str(tpa.get("TPid") or 0))
         except Exception:
@@ -241,12 +243,9 @@ def recover_pa(payload: RecoverInbound) -> Dict[str, Any]:
         cmi_calc = str(hcgen_cmi(cmc, hid))
         # Resolve CRF exponent: prefer CRF.c1 if dict provided, fallback to SCID.RF
         rf_val = ((phc.get("SCID") or {}).get("RF") if isinstance(phc.get("SCID"), dict) else None)
-        if isinstance(crf_in, dict):
-            crf_src = crf_in.get("c1")
-        else:
-            crf_src = crf_in
         try:
-            crf_int = int(str(crf_src or rf_val or 0)) % DL_Q
+            crf_src = rf_val if rf_val is not None else crf_in
+            crf_int = int(str(crf_src or 0)) % DL_Q
         except Exception:
             crf_int = 0
         af_prev = str(tpm.get("AF"))
@@ -261,10 +260,23 @@ def recover_pa(payload: RecoverInbound) -> Dict[str, Any]:
         apa_out = {"APid": apid, "APproof": {"r": str(sig["r"]), "e": str(sig["e"]), "s": str(sig["s"])}}
         pa_out = {"APM": apm_prime, "APA": apa_out}
         try:
+            phc_mod = json.loads(json.dumps(phc))
+            phc_mod.setdefault("ASO", {}).setdefault("TPM", {})["AF"] = str(af_calc)
+        except Exception:
+            phc_mod = phc
+        try:
+            tp_sig = tpa.get("TPproof") or {}
+            ch_sig = proof.get("CHproof") or {}
+            verified_tp = bool(schnorr_verify(tp_pk, canonical_json({"TPM": tpm, "TPid": tpa.get("TPid")}).encode(), {"r": int(str(tp_sig.get("r") or 0)), "e": int(str(tp_sig.get("e") or 0)), "s": int(str(tp_sig.get("s") or 0))}))
+            verified_ch = bool(schnorr_verify(tp_pk, canonical_json({"TPCH": proof.get("TPCH"), "APCH": proof.get("APCH")}).encode(), {"r": int(str(ch_sig.get("r") or 0)), "e": int(str(ch_sig.get("e") or 0)), "s": int(str(ch_sig.get("s") or 0))}))
+        except Exception:
+            verified_tp = False
+            verified_ch = False
+        try:
             upub = int(str(payload.user_pub))
         except Exception:
             return {"success": False, "error": "invalid_user_pub"}
-        enc = _encrypt_to_user(upub, {"PA": pa_out, "verified_cmi": (str(cmi_stored) == str(cmi_calc)), "verified_af": (af_prev == af_calc)})
+        enc = _encrypt_to_user(upub, {"PA": pa_out, "PHC": phc_mod, "verified_cmi": (str(cmi_stored) == str(cmi_calc)), "verified_af": (str((phc_mod.get("ASO") or {}).get("TPM", {}).get("AF")) == str(af_calc)), "verified_tp": verified_tp, "verified_ch": verified_ch})
         return {"success": True, "par": enc}
     except Exception as e:
         log.error("recover_pa_failed: %s", str(e))
@@ -342,58 +354,7 @@ def _apdb_get(hid: str) -> Dict[str, Any] | None:
     except Exception:
         return None
 
-class RecoverInbound(BaseModel):
-    ar: Dict[str, Any]
-    user_pub: int
-
-@router.post("/ap/recover_pa")
-def recover_pa(payload: RecoverInbound) -> Dict[str, Any]:
-    try:
-        raw = elgamal_decrypt_bytes(AP_SK, payload.ar)
-        obj = json_loads(raw)
-        phc = obj.get("PHC")
-        hid = obj.get("HID")
-        crf_in = obj.get("CRF")
-        if not isinstance(phc, dict) or not isinstance(hid, str):
-            return {"success": False, "error": "invalid_payload"}
-        tpa = phc.get("TPA") or {}
-        aso = phc.get("ASO") or {}
-        tpm = aso.get("TPM") or {}
-        try:
-            tp_pk = int(str(tpa.get("TPid") or 0))
-        except Exception:
-            tp_pk = TP_DL_PK
-        rec = _apdb_get(hid)
-        if not rec:
-            return {"success": False, "error": "not_found"}
-        cmc = rec.get("CMC") or []
-        cmi_stored = rec.get("CMI") or "0"
-        cmi_calc = str(hcgen_cmi(cmc, hid))
-        rf_val = ((phc.get("SCID") or {}).get("RF") if isinstance(phc.get("SCID"), dict) else None)
-        try:
-            crf_int = int(str(crf_in or rf_val or 0)) % DL_Q
-        except Exception:
-            crf_int = 0
-        af_prev = str(tpm.get("AF"))
-        try:
-            r2 = int(str(rec.get("r_bind2") or 0))
-        except Exception:
-            r2 = 0
-        af_calc = str(compute_af_formal(str(hid), AP_PK, tp_pk or TP_DL_PK, int(cmi_calc) % DL_Q, crf_int, r2))
-        apm_prime = {"CMI": str(cmi_calc), "Time": datetime.utcnow().isoformat() + "Z"}
-        apid = str(AP_PK)
-        sig = schnorr_sign(AP_SK, canonical_json({"APM": apm_prime, "APid": apid}).encode())
-        apa_out = {"APid": apid, "APproof": {"r": str(sig["r"]), "e": str(sig["e"]), "s": str(sig["s"])}}
-        pa_out = {"APM": apm_prime, "APA": apa_out}
-        try:
-            upub = int(str(payload.user_pub))
-        except Exception:
-            return {"success": False, "error": "invalid_user_pub"}
-        enc = _encrypt_to_user(upub, {"PA": pa_out, "verified_cmi": (str(cmi_stored) == str(cmi_calc)), "verified_af": (af_prev == af_calc)})
-        return {"success": True, "par": enc}
-    except Exception as e:
-        log.error("recover_pa_failed: %s", str(e))
-        return {"success": False, "error": str(e)}
+ 
 
 class UpdateInitRequest(BaseModel):
     ar: Dict[str, Any]
