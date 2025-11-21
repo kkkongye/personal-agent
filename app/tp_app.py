@@ -13,19 +13,21 @@ def ui() -> Response:
     <h2>Trust Provider (TP)</h2>
     <button id=keys>Fetch Public Keys</button>
     <pre id=out></pre>
-    <h3>Issue PHC (demo)</h3>
-    <button id=issue>POST /v1/tp/issue_phc</button>
-    <pre id=phc></pre>
+    <h3>Identity Reveal</h3>
+    <input id="did_input" type="text" placeholder="Enter DID" size="80" />
+    <button id="reveal">Reveal Identity</button>
+    <pre id="reveal_out"></pre>
     <script>
     const out = document.getElementById('out');
-    const phc = document.getElementById('phc');
+    const reveal_out = document.getElementById('reveal_out');
     document.getElementById('keys').onclick = async ()=>{
       const r = await fetch('/v1/tp/public_keys'); out.textContent = JSON.stringify(await r.json(), null, 2);
     };
-    document.getElementById('issue').onclick = async ()=>{
-      const payload = {af:'af.demo', cmi:'cmi.demo', cdid:'cdid:demo', ecid:'g'};
-      const r = await fetch('/v1/tp/issue_phc', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(payload)});
-      phc.textContent = JSON.stringify(await r.json(), null, 2);
+    document.getElementById('reveal').onclick = async ()=>{
+      const did = document.getElementById('did_input').value;
+      if (!did) { reveal_out.textContent = 'Please enter a DID.'; return; }
+      const r = await fetch('/v1/tp/reveal', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({did})});
+      reveal_out.textContent = JSON.stringify(await r.json(), null, 2);
     };
     </script>
     </body></html>
