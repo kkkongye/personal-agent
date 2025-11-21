@@ -400,11 +400,11 @@ def ui() -> Response:
       <label>Email</label><input id=email value="alice@example.com">
       <label>Passport</label><input id=passport value="P123456789">
     </div>
-    <button id=issue>1.Request PHC</button>
+    <button id=issue>1.请求 PHC</button>
     <pre id=phc></pre>
-    <button id=fetchcmm disabled>2.Fetch CMM</button>
+    <button id=fetchcmm disabled>2.选择PA的配置信息</button>
     <div id=cmm_ui></div>
-    <button id=submitcmc disabled>Submit CMM</button>
+    <button id=submitcmc disabled>提交PA的配置信息</button>
     <pre id=pa_cmm></pre>
     <pre id=hash_ch></pre>
     <pre id=hash_cch></pre>
@@ -415,9 +415,9 @@ def ui() -> Response:
     <button id=recoverpa disabled>4.PA丢失，恢复PA</button>
     <button id=recoverboth>PHC与PA都丢失，恢复PA</button>
     <pre id=pa_recover></pre>
-    <button id=updatepa disabled>5.Update PA</button>
+    <button id=updatepa disabled>5.更新PA</button>
     <div id=upd_cmm_ui></div>
-    <button id=submitUpdate disabled>Submit Update</button>
+    <button id=submitUpdate disabled>提交更新</button>
     <pre id=pa_update></pre>
     
     
@@ -436,6 +436,39 @@ def ui() -> Response:
     const hashStatus=document.getElementById('hash_status');
         const paRecover=document.getElementById('pa_recover');
     const cmmUI=document.getElementById('cmm_ui');
+    const zhCat=['输入','推理','知识','数据接入','输出'];
+    const zhLabelMap={
+      'text':'文本',
+      'voice':'语言',
+      'image':'图像',
+      'video':'视频',
+      'sensor':'传感器',
+      'system-event':'系统事件',
+      'rule-engine':'规则引擎',
+      'bayesian-net':'贝叶斯网络',
+      'fuzzy-logic':'模糊逻辑',
+      'llm':'大模型',
+      'retrieval':'检索',
+      'neural-network':'神经网络',
+      'planner':'规划',
+      'safety-filter':'安全过滤',
+      'local-memory':'本地记忆',
+      'long-term-memory':'长期记忆',
+      'vector-index':'向量索引',
+      'knowledge-base':'知识库',
+      'shared-org-data':'组织共享数据',
+      'browser':'浏览器',
+      'external-api':'外部API',
+      'database':'数据库',
+      'blockchain':'区块链',
+      'ipfs':'IPFS',
+      'iot-device':'物联网设备',
+      'cloud-storage':'云存储',
+      'speech':'语音',
+      'notification':'通知',
+      'json-api':'JSON API',
+      'actuation':'执行'
+    };
         let phcObj=null;
         let cmmObj=null;
         let cmcObj=null;
@@ -457,10 +490,10 @@ def ui() -> Response:
       const data=await r.json(); cmmObj=data.cmm; cmcObj=(cmmObj||[]).map(row=>row[0]);
       window.__cmmSk = String(data.sk||""); window.__cmmPk = String(data.pk||"");
         const htmlRows=(cmmObj||[]).map((row,i)=>{
-            const opts=row.map((opt,j)=>`<label><input type=radio name=\"row_${i}\" value='${j}' ${j===0?"checked":""}>${opt.label}</label>`).join(' ');
-            return `<div>Row ${i+1}: ${opts}</div>`;
+            const opts=row.map((opt,j)=>`<label><input type=radio name=\"row_${i}\" value='${j}' ${j===0?"checked":""}>${zhLabelMap[opt.label]||opt.label}</label>`).join(' ');
+            return `<div>${zhCat[i]}：${opts}</div>`;
         }).join('');
-      cmmUI.innerHTML = htmlRows + `<div><button id='confirmcmc'>Confirm Selection</button></div>`;
+      cmmUI.innerHTML = htmlRows + `<div><button id='confirmcmc'>确认选择</button></div>`;
       document.getElementById('confirmcmc').onclick = ()=>{
         cmcObj = (cmmObj||[]).map((row,i)=>{ const idx = Number((document.querySelector(`input[name='row_${i}']:checked`)||{value:0}).value); return row[idx]; });
         const keysReady = (window.__cmmSk && window.__cmmPk);
@@ -534,7 +567,7 @@ def ui() -> Response:
           const r=await fetch('/user/update_init',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({base_url:apBase, phc:phcObj, user})});
           const data=await r.json(); const cmm=data.cmm; window.__updSk=String(data.sk||""); window.__updPk=String(data.pk||""); window.__lastCMM=cmm;
           const updUI=document.getElementById('upd_cmm_ui');
-          const htmlRows=(cmm||[]).map((row,i)=>{ const opts=row.map((opt,j)=>`<label><input type=radio name=\"upd_row_${i}\" value='${j}' ${j===0?"checked":""}>${opt.label}</label>`).join(' '); return `<div>Update Row ${i+1}: ${opts}</div>`; }).join('');
+          const htmlRows=(cmm||[]).map((row,i)=>{ const opts=row.map((opt,j)=>`<label><input type=radio name=\"upd_row_${i}\" value='${j}' ${j===0?"checked":""}>${zhLabelMap[opt.label]||opt.label}</label>`).join(' '); return `<div>${zhCat[i]}：${opts}</div>`; }).join('');
           updUI.innerHTML = htmlRows;
           document.getElementById('submitUpdate').disabled = !((cmm && cmm.length>0) && (window.__updSk && window.__updPk));
         }catch(e){ out.textContent='Update PA failed: '+(e&&e.message?e.message:'unknown'); }
