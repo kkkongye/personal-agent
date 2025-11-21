@@ -82,8 +82,8 @@ class PHCModel(BaseModel):
 class TraceRequest(BaseModel):
     rf_ciphertext: str
 
-class RevealRequest(BaseModel):
-    phc: Dict[str, Any]
+class RevealByDidRequest(BaseModel):
+    did: str
 
 
 class SecureInbound(BaseModel):
@@ -221,6 +221,11 @@ def issue_phc_secure(payload: SecureInbound) -> Dict[str, Any]:
         phc["CRF"] = {"c1": str(crf.get("c1")), "c2": str(crf.get("c2"))}
     except Exception:
         phc["CRF"] = crf
+    try:
+        hid = hashlib.sha256(str(idv).encode()).hexdigest()
+        _tpdb_put(hid, {"cid": cid, "cid_enc": phc.get("CID_enc"), "rf": str(rf), "r_bind": str(rb), "phc": phc})
+    except Exception:
+        pass
     return {"success": True, "phc": phc, "mode": "secure_phc_jsonld"}
 
 
@@ -245,16 +250,21 @@ def trace_identity(req: TraceRequest) -> Dict[str, Any]:
 
 
 @router.post("/tp/reveal")
-def reveal_identity(req: RevealRequest) -> Dict[str, Any]:
-    """Reveal user identity from PHC using RF and CID.
+def reveal_identity(req: RevealByDidRequest) -> Dict[str, Any]:
+    """Reveal user identity from PHC using DID.
 
     Steps:
+    - Find PHC by DID in local storage
     - Derive s1 = KDF(lambda, sk_tp, RF)
     - Decrypt CID_enc with s1 (fallback to CID)
     - Fetch encrypted secinfo from IPFS and decrypt with s1
     - Paillier-decrypt RF to get id_hash (evidence)
     """
-    phc = req.phc or {}
+    db_rec = _find_phc_by_did(req.did)
+    if not db_rec:
+        raise HTTPException(status_code=404, detail="did_not_found")
+
+    phc = db_rec.get("phc") or {}
     try:
         scid = phc.get("SCID") or {}
         rf_str = str(scid.get("RF"))
@@ -298,3 +308,88 @@ def reveal_identity(req: RevealRequest) -> Dict[str, Any]:
     }
 class RevealRequest(BaseModel):
     phc: Dict[str, Any]
+class RecoverPHCInbound(BaseModel):
+    rec: Dict[str, Any]
+    user_pub: int
+
+def _tpdb_root() -> str:
+    import os
+    root = os.path.join(os.getcwd(), "local_store", "tp_db")
+    os.makedirs(root, exist_ok=True)
+    return root
+
+def _tpdb_put(hid: str, obj: Dict[str, Any]) -> None:
+    import os
+    root = _tpdb_root()
+    path = os.path.join(root, f"{hid}.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False)
+
+def _tpdb_get(hid: str) -> Dict[str, Any] | None:
+    import os
+    root = _tpdb_root()
+    path = os.path.join(root, f"{hid}.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+def _find_phc_by_did(did: str) -> Dict[str, Any] | None:
+    import os
+    root = _tpdb_root()
+    for fname in os.listdir(root):
+        if not fname.endswith('.json'):
+            continue
+        hid = fname.split('.')[0]
+        data = _tpdb_get(hid)
+        if data and data.get('phc', {}).get('DID') == did:
+            return data
+    return None
+@router.post("/tp/recover_phc")
+def recover_phc(payload: RecoverPHCInbound) -> Dict[str, Any]:
+    try:
+        decrypted = elgamal_decrypt_bytes(TP_DL_SK, payload.rec)
+        pt = json.loads(decrypted.decode())
+    except Exception:
+        raise HTTPException(status_code=400, detail="decrypt_failed")
+    idv = str((pt.get("PII") or {}).get("id_number") or pt.get("ID") or "")
+    bi = pt.get("BI") or {}
+    pii = pt.get("PII") or {}
+    if not idv:
+        raise HTTPException(status_code=400, detail="missing_id")
+    hid = hashlib.sha256(idv.encode()).hexdigest()
+    rec = _tpdb_get(hid)
+    if not rec:
+        raise HTTPException(status_code=404, detail="not_found")
+    try:
+        rf_int = int(str(rec.get("rf")))
+    except Exception:
+        rf_int = 0
+    s1 = kdf_s1(TP_PAILLIER.private["lambda"], TP_DL_SK, rf_int)
+    cid = rec.get("cid")
+    cid_enc = rec.get("cid_enc")
+    if cid_enc and not cid:
+        try:
+            cid = sym_decrypt(s1, str(cid_enc)).decode()
+        except Exception:
+            cid = None
+    if not cid:
+        raise HTTPException(status_code=404, detail="missing_cid")
+    enc = ipfs_get(str(cid))
+    if not enc:
+        raise HTTPException(status_code=404, detail="secinfo_not_found")
+    try:
+        pt2 = sym_decrypt(s1, enc).decode()
+        sec = json.loads(pt2)
+    except Exception:
+        raise HTTPException(status_code=400, detail="secinfo_decrypt_failed")
+    ok = (sec.get("PII") == pii) and (sec.get("BI") == bi)
+    if not ok:
+        raise HTTPException(status_code=403, detail="verify_failed")
+    from crypto_lib import elgamal_encrypt_bytes as tp_elg_enc
+    raw = json.dumps({"PHC": rec.get("phc")}, separators=(",", ":")).encode()
+    phc_enc = tp_elg_enc(int(payload.user_pub), raw)
+    return {"success": True, "phc_enc": phc_enc}

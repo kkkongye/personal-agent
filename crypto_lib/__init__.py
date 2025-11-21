@@ -183,7 +183,14 @@ def compute_af(id_str: str, pk_ap: int, pk_tp: int, r_bind: int) -> int:
     return (h * pk_ap % DL_P) * (pk_tp % DL_P) % DL_P * pow(DL_G, r_bind % DL_Q, DL_P) % DL_P
 
 def compute_af_formal(id_str: str, pk_ap: int, pk_tp: int, cmi_int: int, crf_int: int, r_bind_int: int) -> int:
-    h = hash_to_int(id_str.encode())
+    try:
+        s = str(id_str)
+        if len(s) == 64 and all(c in "0123456789abcdefABCDEF" for c in s):
+            h = int(s, 16) % DL_P
+        else:
+            h = hash_to_int(s.encode())
+    except Exception:
+        h = hash_to_int(str(id_str).encode())
     term_ap = pow(pk_ap % DL_P, cmi_int % DL_Q, DL_P)
     term_tp = pow(pk_tp % DL_P, crf_int % DL_Q, DL_P)
     term_r = pow(DL_G, r_bind_int % DL_Q, DL_P)
