@@ -401,6 +401,7 @@ def ui() -> Response:
       <label>Passport</label><input id=passport value="P123456789">
     </div>
     <button id=issue>1.请求 PHC</button>
+    <button id=issue>1.请求PHC</button>
     <pre id=phc></pre>
     <button id=fetchcmm disabled>2.选择PA的配置信息</button>
     <div id=cmm_ui></div>
@@ -410,12 +411,12 @@ def ui() -> Response:
     <pre id=hash_cch></pre>
     <pre id=hash_status></pre>
 
-    <button id=createAgent disabled>3.Create Personal Agent</button>
+    <button id=createAgent disabled>3.创建个人智能体</button>
     <pre id=agent_out></pre>
     <button id=recoverpa disabled>4.PA丢失，恢复PA</button>
     <button id=recoverboth>PHC与PA都丢失，恢复PA</button>
     <pre id=pa_recover></pre>
-    <button id=updatepa disabled>5.更新PA</button>
+    <button id=updatepa disabled>5.更新PA的配置信息</button>
     <div id=upd_cmm_ui></div>
     <button id=submitUpdate disabled>提交更新</button>
     <pre id=pa_update></pre>
@@ -568,6 +569,7 @@ def ui() -> Response:
           const data=await r.json(); const cmm=data.cmm; window.__updSk=String(data.sk||""); window.__updPk=String(data.pk||""); window.__lastCMM=cmm;
           const updUI=document.getElementById('upd_cmm_ui');
           const htmlRows=(cmm||[]).map((row,i)=>{ const opts=row.map((opt,j)=>`<label><input type=radio name=\"upd_row_${i}\" value='${j}' ${j===0?"checked":""}>${zhLabelMap[opt.label]||opt.label}</label>`).join(' '); return `<div>${zhCat[i]}：${opts}</div>`; }).join('');
+        const htmlRows=(cmm||[]).map((row,i)=>{ const opts=row.map((opt,j)=>`<label><input type=radio name=\"upd_row_${i}\" value='${j}' ${j===0?"checked":""}>${zhLabelMap[opt.label]||opt.label}</label>`).join(' '); return `<div>${zhCat[i]}：${opts}</div>`; }).join('');
           updUI.innerHTML = htmlRows;
           document.getElementById('submitUpdate').disabled = !((cmm && cmm.length>0) && (window.__updSk && window.__updPk));
         }catch(e){ out.textContent='Update PA failed: '+(e&&e.message?e.message:'unknown'); }
