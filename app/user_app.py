@@ -230,6 +230,19 @@ def user_cmm_submit(req: RequestCMMSubmit) -> Dict[str, Any]:
         obj["memory_path"] = full_path
     except Exception:
         obj["memory_path"] = None
+    try:
+        chain = ((obj.get("PHC") or {}).get("ASO") or {}).get("HASH_CHAIN") or {}
+        chain_head = chain.get("head")
+        local_prev = sha256_hex(str(hid_use))
+        idx = 0
+        for row in (req.cmc or []):
+            for it in (row or []):
+                data = canonical_json({"label": str(it.get("label")), "idx": idx})
+                local_prev = sha256_hex(local_prev + data)
+                idx += 1
+        obj["verified_hash_chain_user"] = (str(local_prev) == str(chain_head or ""))
+    except Exception:
+        obj["verified_hash_chain_user"] = False
     return obj
 
 @app.post('/user/create_agent')

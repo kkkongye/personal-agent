@@ -196,6 +196,11 @@ def cmm_submit(payload: CMMSubmitRequest) -> Dict[str, Any]:
             _apdb_put(hid, {"CMC": cmc, "CMI": str(cmi_int), "r_bind2": str(rb2), "ts": datetime.utcnow().isoformat() + "Z"})
         except Exception:
             pass
+        try:
+            chain = _compute_hash_chain(hid, cmc)
+            phc_mod.setdefault("ASO", {}).setdefault("HASH_CHAIN", chain)
+        except Exception:
+            chain = {"head": None, "entries": []}
         enc = _encrypt_to_user(upub, {
             "r_bind2": str(rb2),
             "r_ap": str(r_ap),
@@ -207,6 +212,7 @@ def cmm_submit(payload: CMMSubmitRequest) -> Dict[str, Any]:
             "verified_af": verified_af,
             "ap_pk": str(AP_PK),
             "tp_pk": str(TP_DL_PK),
+            "HASH_CHAIN_HEAD": str(chain.get("head")) if chain.get("head") else None,
         })
         return {"success": True, "par": enc}
     except Exception as e:
@@ -337,6 +343,20 @@ def _apdb_get(hid: str) -> Dict[str, Any] | None:
         return None
 
  
+def _compute_hash_chain(hid: str, cmc: List[List[Dict[str, Any]]]) -> Dict[str, Any]:
+    from user.crypto import canonical_json, sha256_hex
+    prev = sha256_hex(str(hid))
+    entries: List[Dict[str, Any]] = []
+    idx = 0
+    for row in (cmc or []):
+        for item in (row or []):
+            label = str(item.get("label") or "")
+            data = canonical_json({"label": label, "idx": idx})
+            h = sha256_hex(prev + data)
+            entries.append({"idx": idx, "label": label, "prev": prev, "hash": h})
+            prev = h
+            idx += 1
+    return {"head": prev, "entries": entries}
 
 class UpdateInitRequest(BaseModel):
     ar: Dict[str, Any]
@@ -429,6 +449,11 @@ def update_submit(payload: UpdateSubmitRequest) -> Dict[str, Any]:
             _apdb_put(hid, {"CMC": cmc, "CMI": str(cmi_int), "r_bind2": str(rb3), "ts": datetime.utcnow().isoformat() + "Z"})
         except Exception:
             pass
+        try:
+            chain = _compute_hash_chain(hid, cmc)
+            phc_mod.setdefault("ASO", {}).setdefault("HASH_CHAIN", chain)
+        except Exception:
+            chain = {"head": None, "entries": []}
         enc = _encrypt_to_user(upub, {
             "r_bind2": str(rb3),
             "r_ap": str(r_ap3),
@@ -440,6 +465,7 @@ def update_submit(payload: UpdateSubmitRequest) -> Dict[str, Any]:
             "verified_af": (str((phc_mod.get("ASO") or {}).get("TPM", {}).get("AF")) == str(af_calc)),
             "ap_pk": str(AP_PK),
             "tp_pk": str(TP_DL_PK),
+            "HASH_CHAIN_HEAD": str(chain.get("head")) if chain.get("head") else None,
         })
         return {"success": True, "par": enc}
     except Exception as e:
