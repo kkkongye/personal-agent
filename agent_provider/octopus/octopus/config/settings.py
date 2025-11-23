@@ -130,6 +130,8 @@ class Settings(BaseSettings):
     openai_model: str | None = None
     openai_temperature: float | None = None
     openai_max_tokens: int | None = None
+    # NEWS API
+    newsapi_api_key: str | None = None
 
     # JWT AUTHENTICATION
     jwt_algorithm: str | None = None

@@ -40,6 +40,7 @@ logger = get_logger(__name__)
 master_agent = None
 message_agent = None
 text_processor_agent = None
+news_agent = None
 
 # Global ANP Receiver Service instance
 anp_receiver_service: ANPReceiverService | None = None
@@ -48,7 +49,7 @@ anp_receiver_service: ANPReceiverService | None = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan events."""
-    global master_agent, message_agent, text_processor_agent, anp_receiver_service
+    global master_agent, message_agent, text_processor_agent, news_agent, anp_receiver_service
 
     # Startup
     logger.info("Starting Octopus FastAPI application (main module)")
@@ -73,6 +74,16 @@ async def lifespan(app: FastAPI):
         master_agent = MasterAgent()
         master_agent.initialize()
         logger.info("Master Agent initialized successfully")
+
+        # Initialize News Agent (optional)
+        try:
+            logger.info("Initializing News Agent...")
+            from octopus.agents.news_agent import NewsAgent
+
+            news_agent = NewsAgent()
+            logger.info("News Agent initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize News Agent: {str(e)}")
 
         # Inject agents into chat router
         set_agents(master_agent, message_agent)

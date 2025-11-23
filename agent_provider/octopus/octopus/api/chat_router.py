@@ -4,6 +4,7 @@ Provides chat and status endpoints for the web frontend.
 """
 
 import logging
+import json
 import uuid
 from datetime import datetime
 
@@ -82,7 +83,17 @@ async def chat(request: ChatRequest):
             f"🟢 [CHAT ROUTER] Chat response generated for request {request_id}"
         )
         logger.info(f"🟢 [CHAT ROUTER] Response content: {response_text}")
-
+        try:
+            parsed = json.loads(response_text) if isinstance(response_text, str) else None
+        except Exception:
+            parsed = None
+        if isinstance(parsed, dict) and parsed.get("success") is False:
+            return ChatResponse(
+                success=False,
+                error=str(parsed.get("error") or "未知错误"),
+                request_id=request_id,
+                timestamp=timestamp,
+            )
         return ChatResponse(
             success=True,
             response=response_text,

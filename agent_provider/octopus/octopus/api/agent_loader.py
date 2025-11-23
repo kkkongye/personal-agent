@@ -28,6 +28,7 @@ def load_all_agents() -> list[str]:
     # Import and register sub-agents
     agent_modules = [
         ("octopus.agents.text_processor_agent", "TextProcessorAgent"),
+        ("octopus.agents.news_agent", "NewsAgent"),
         # Add more agent modules here as they are created
     ]
 

@@ -243,10 +243,13 @@ class MasterAgent(BaseAgent):
 
             # Return the result as a string
             self.logger.info("🟢 [MASTER AGENT] Agent execution completed successfully")
-            if isinstance(result, dict):
-                return json.dumps(result, ensure_ascii=False, indent=2)
-            else:
-                return str(result)
+            try:
+                return self._format_result_natural_language(result, request)
+            except Exception:
+                if isinstance(result, dict):
+                    return json.dumps(result, ensure_ascii=False, indent=2)
+                else:
+                    return str(result)
 
         except Exception as e:
             self.logger.error(
@@ -411,6 +414,64 @@ If no suitable agent is found, respond with:
         Very conservative rules targeting built-in text_processor methods.
         """
         lower = request.lower()
+
+        # ---- Heuristics for NewsAgent ----
+        has_news = any(a["name"] == "news" for a in available_agents)
+        if has_news:
+            import re as _re
+
+            news_kw = any(k in request for k in ["新闻", "头条", "热点", "快讯"]) or ("news" in lower)
+
+            # Extract topic like “关于XXX的新闻/头条”
+            topic = None
+            m = _re.search(r"关于(.+?)(?:的)?(?:新闻|头条|热点|快讯)", request)
+            if m:
+                topic = m.group(1).strip()
+
+            # Common tech/topic hints
+            if ("人工智能" in request) or ("AI" in request) or ("AIGC" in request):
+                topic = topic or "人工智能"
+
+            # Category mapping based on Chinese/English keywords
+            cat_map = [
+                ("sports", ["体育", "sports"]),
+                ("business", ["商业", "财经", "经济", "business"]),
+                ("health", ["健康", "医疗", "health"]),
+                ("science", ["科学", "science"]),
+            ]
+
+            if news_kw:
+                # If we detected an explicit category keyword, prefer get_headlines
+                for cat, kws in cat_map:
+                    if any(kw in request for kw in kws):
+                        return {
+                            "agent_name": "news",
+                            "method_name": "get_headlines",
+                            "parameters": {"topic": cat, "country": "us", "page_size": 8},
+                            "confidence": 0.75,
+                            "reasoning": "Heuristic: news + category keywords",
+                        }
+
+                # Otherwise summarize by topic (or general news if no topic)
+                if topic:
+                    return {
+                        "agent_name": "news",
+                        "method_name": "get_news_summary",
+                        "parameters": {"topic": topic, "language": "zh", "max_articles": 8},
+                        "confidence": 0.75,
+                        "reasoning": "Heuristic: news + topic detected",
+                    }
+
+                # Fallback: general headlines (science feels safe for tech-driven audiences)
+                return {
+                    "agent_name": "news",
+                    "method_name": "get_headlines",
+                    "parameters": {"topic": "science", "country": "us", "page_size": 8},
+                    "confidence": 0.6,
+                    "reasoning": "Heuristic: news keywords without explicit topic",
+                }
+
+        # ---- Heuristics for TextProcessor ----
         has_text_processor = any(a["name"] == "text_processor" for a in available_agents)
         if not has_text_processor:
             return None
@@ -472,6 +533,59 @@ If no suitable agent is found, respond with:
         except Exception as e:
             self.logger.error(f"Error executing agent method: {str(e)}")
             raise
+
+    def _format_result_natural_language(self, result: Any, request: str) -> str:
+        """Try to format agent result into a user-friendly natural language reply.
+
+        Rules:
+        - If result is a NewsAgent summary dict (has 'summary'), return its summary in Chinese, prefixed with optional topic.
+        - If result is NewsAgent headlines/search dict (has 'articles' but no 'summary'), render a concise bullet list in Chinese.
+        - Otherwise, if result is string, return it; if dict/list, fallback to JSON string.
+        """
+        try:
+            # String passthrough
+            if isinstance(result, str):
+                return result
+
+            # Dict handling
+            if isinstance(result, dict):
+                # News summary path
+                if "summary" in result and (result.get("summary") or ""):
+                    topic = result.get("topic")
+                    header = f"主题：{topic}\n\n" if topic else ""
+                    return header + str(result.get("summary"))
+
+                # Headlines/articles list
+                if "articles" in result:
+                    articles = result.get("articles") or []
+                    if not articles:
+                        return "未找到相关新闻。"
+                    lines: list[str] = []
+                    for a in articles:
+                        title = a.get("title") or ""
+                        src = a.get("source") or ""
+                        pub = a.get("publishedAt") or ""
+                        url = a.get("url") or ""
+                        lines.append(f"- {title}（{src}，{pub}）{url}")
+                    return "以下是相关新闻：\n" + "\n".join(lines)
+
+                # Generic dict fallback
+                return json.dumps(result, ensure_ascii=False, indent=2)
+
+            # List fallback
+            if isinstance(result, list):
+                if not result:
+                    return "（结果为空）"
+                return "\n".join([str(item) for item in result])
+
+            # Other types
+            return str(result)
+        except Exception:
+            # As a last resort, return JSON
+            try:
+                return json.dumps(result, ensure_ascii=False, indent=2) if isinstance(result, (dict, list)) else str(result)
+            except Exception:
+                return str(result)
 
     @agent_interface(
         description="Get current status of the master agent",
