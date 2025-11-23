@@ -245,10 +245,10 @@ def user_create_agent(req: RequestCreateAgent) -> Dict[str, Any]:
             "id": phc_id,
             "did": did,
             "modules": {
-                "inputs": [m.get("label") for m in (cmc[0] if len(cmc)>0 else [])],
-                "reasoning": [m.get("label") for m in (cmc[1] if len(cmc)>1 else [])],
-                "knowledge": [m.get("label") for m in (cmc[2] if len(cmc)>2 else [])],
-                "data_access": [m.get("label") for m in (cmc[3] if len(cmc)>3 else [])],
+                "features": [m.get("label") for m in (cmc[0] if len(cmc)>0 else [])],
+                "inputs": [m.get("label") for m in (cmc[1] if len(cmc)>1 else [])],
+                "reasoning": [m.get("label") for m in (cmc[2] if len(cmc)>2 else [])],
+                "knowledge": [m.get("label") for m in (cmc[3] if len(cmc)>3 else [])],
                 "outputs": [m.get("label") for m in (cmc[4] if len(cmc)>4 else [])],
             },
             "binding": {
@@ -436,10 +436,10 @@ def ui() -> Response:
     const hashStatus=document.getElementById('hash_status');
         const paRecover=document.getElementById('pa_recover');
     const cmmUI=document.getElementById('cmm_ui');
-    const zhCat=['输入','推理','知识','数据接入','输出'];
+    const zhCat=['功能','输入','推理','知识','输出'];
     const zhLabelMap={
       'text':'文本',
-      'voice':'语言',
+      'voice':'语音',
       'image':'图像',
       'video':'视频',
       'sensor':'传感器',
@@ -469,6 +469,7 @@ def ui() -> Response:
       'json-api':'JSON API',
       'actuation':'执行'
     };
+    const zhLabelMapExtra={ 'text-processing':'文本处理', 'news-search':'新闻查询' };
         let phcObj=null;
         let cmmObj=null;
         let cmcObj=null;
@@ -490,21 +491,19 @@ def ui() -> Response:
       const data=await r.json(); cmmObj=data.cmm; cmcObj=(cmmObj||[]).map(row=>row[0]);
       window.__cmmSk = String(data.sk||""); window.__cmmPk = String(data.pk||"");
         const htmlRows=(cmmObj||[]).map((row,i)=>{
-            const opts=row.map((opt,j)=>`<label><input type=radio name=\"row_${i}\" value='${j}' ${j===0?"checked":""}>${zhLabelMap[opt.label]||opt.label}</label>`).join(' ');
+            const opts=row.map((opt,j)=>`<label><input type=checkbox name=\"row_${i}\" value='${j}'>${(zhLabelMap[opt.label]||zhLabelMapExtra[opt.label]||opt.label)}</label>`).join(' ');
             return `<div>${zhCat[i]}：${opts}</div>`;
         }).join('');
-      cmmUI.innerHTML = htmlRows + `<div><button id='confirmcmc'>确认选择</button></div>`;
-      document.getElementById('confirmcmc').onclick = ()=>{
-        cmcObj = (cmmObj||[]).map((row,i)=>{ const idx = Number((document.querySelector(`input[name='row_${i}']:checked`)||{value:0}).value); return row[idx]; });
-        const keysReady = (window.__cmmSk && window.__cmmPk);
-        document.getElementById('submitcmc').disabled = !((cmcObj && cmcObj.length>0) && keysReady);
-      };
+      cmmUI.innerHTML = htmlRows;
+      document.getElementById('submitcmc').disabled = !(window.__cmmSk && window.__cmmPk);
         };
         
         document.getElementById('submitcmc').onclick = async ()=>{
         const apBase = 'http://127.0.0.1:8002';
         const hid = idnum.value? (await (async()=>{return (idnum.value)})()) : '';
-        const r=await fetch('/user/cmm_submit',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({base_url:apBase, cmc:cmcObj||[], hid:hid, phc:phcObj, user_sk: window.__cmmSk||"", user_pk: window.__cmmPk||""})});
+        const cmc = (cmmObj||[]).map((row,i)=>{ const nodes = Array.from(document.querySelectorAll(`input[name='row_${i}']:checked`)); const idxs = nodes.map(n=>Number(n.value)); return row.filter((_,j)=>idxs.includes(j)); });
+        cmcObj = cmc;
+        const r=await fetch('/user/cmm_submit',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({base_url:apBase, cmc:cmc||[], hid:hid, phc:phcObj, user_sk: window.__cmmSk||"", user_pk: window.__cmmPk||""})});
       const data=await r.json();
       paCmm.textContent=JSON.stringify(data,null,2);
       hashCH.textContent = 'CH: ' + String(data.CH || '');
@@ -567,7 +566,7 @@ def ui() -> Response:
           const r=await fetch('/user/update_init',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({base_url:apBase, phc:phcObj, user})});
           const data=await r.json(); const cmm=data.cmm; window.__updSk=String(data.sk||""); window.__updPk=String(data.pk||""); window.__lastCMM=cmm;
           const updUI=document.getElementById('upd_cmm_ui');
-          const htmlRows=(cmm||[]).map((row,i)=>{ const opts=row.map((opt,j)=>`<label><input type=radio name=\"upd_row_${i}\" value='${j}' ${j===0?"checked":""}>${zhLabelMap[opt.label]||opt.label}</label>`).join(' '); return `<div>${zhCat[i]}：${opts}</div>`; }).join('');
+          const htmlRows=(cmm||[]).map((row,i)=>{ const opts=row.map((opt,j)=>`<label><input type=checkbox name=\"upd_row_${i}\" value='${j}'>${(zhLabelMap[opt.label]||zhLabelMapExtra[opt.label]||opt.label)}</label>`).join(' '); return `<div>${zhCat[i]}：${opts}</div>`; }).join('');
           updUI.innerHTML = htmlRows;
           document.getElementById('submitUpdate').disabled = !((cmm && cmm.length>0) && (window.__updSk && window.__updPk));
         }catch(e){ out.textContent='Update PA failed: '+(e&&e.message?e.message:'unknown'); }
@@ -576,7 +575,7 @@ def ui() -> Response:
         document.getElementById('submitUpdate').onclick = async ()=>{
         const apBase = apEl && apEl.value ? apEl.value : 'http://127.0.0.1:8002';
         const hid = idnum.value? (await (async()=>{return (idnum.value)})()) : '';
-        const cmc = (window.__lastCMM||[]).map((row,i)=>{ const idx = Number((document.querySelector(`input[name='upd_row_${i}']:checked`)||{value:0}).value); return row[idx]; });
+        const cmc = (window.__lastCMM||[]).map((row,i)=>{ const nodes = Array.from(document.querySelectorAll(`input[name='upd_row_${i}']:checked`)); const idxs = nodes.map(n=>Number(n.value)); return row.filter((_,j)=>idxs.includes(j)); });
         const payload={base_url:apBase, cmc:cmc||[], hid:hid, phc:phcObj, user_sk: window.__updSk||"", user_pk: window.__updPk||""};
         const r=await fetch('/user/update_submit',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
         const data=await r.json(); const out=document.getElementById('pa_update'); out.textContent=JSON.stringify(data,null,2);

@@ -286,46 +286,28 @@ def recover_pa(payload: RecoverInbound) -> Dict[str, Any]:
 def _build_cmm_matrix(hid: str, phc: Dict[str, Any]) -> List[List[Dict[str, Any]]]:
     return [
         [
+            {"id": "feature_text_processing", "label": "text-processing", "params": {}},
+            {"id": "feature_news_search", "label": "news-search", "params": {}},
+        ],
+        [
             {"id": "input_text", "label": "text", "params": {}},
             {"id": "input_voice", "label": "voice", "params": {}},
             {"id": "input_image", "label": "image", "params": {}},
-            {"id": "input_video", "label": "video", "params": {}},
-            {"id": "input_sensor", "label": "sensor", "params": {}},
-            {"id": "input_system_event", "label": "system-event", "params": {}},
         ],
         [
-            {"id": "reason_rule_engine", "label": "rule-engine", "params": {}},
-            {"id": "reason_bayesian_net", "label": "bayesian-net", "params": {}},
-            {"id": "reason_fuzzy_logic", "label": "fuzzy-logic", "params": {}},
             {"id": "reason_llm", "label": "llm", "params": {}},
             {"id": "reason_retrieval", "label": "retrieval", "params": {}},
             {"id": "reason_neural_network", "label": "neural-network", "params": {}},
-            {"id": "reason_planner", "label": "planner", "params": {}},
-            {"id": "reason_safety_filter", "label": "safety-filter", "params": {}},
         ],
         [
             {"id": "knowledge_local_memory", "label": "local-memory", "params": {}},
             {"id": "knowledge_long_term_memory", "label": "long-term-memory", "params": {}},
-            {"id": "knowledge_vector_index", "label": "vector-index", "params": {}},
             {"id": "knowledge_base", "label": "knowledge-base", "params": {}},
-            {"id": "knowledge_shared_org_data", "label": "shared-org-data", "params": {}},
-        ],
-        [
-            {"id": "data_browser", "label": "browser", "params": {}},
-            {"id": "data_external_api", "label": "external-api", "params": {}},
-            {"id": "data_database", "label": "database", "params": {}},
-            {"id": "data_blockchain", "label": "blockchain", "params": {}},
-            {"id": "data_ipfs", "label": "ipfs", "params": {}},
-            {"id": "data_iot_device", "label": "iot-device", "params": {}},
-            {"id": "data_cloud_storage", "label": "cloud-storage", "params": {}},
         ],
         [
             {"id": "output_text", "label": "text", "params": {}},
             {"id": "output_speech", "label": "speech", "params": {}},
             {"id": "output_image", "label": "image", "params": {}},
-            {"id": "output_notification", "label": "notification", "params": {}},
-            {"id": "output_json_api", "label": "json-api", "params": {}},
-            {"id": "output_actuation", "label": "actuation", "params": {}},
         ],
     ]
 

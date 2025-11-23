@@ -19,6 +19,7 @@ from .api.chat_router import (
     router as chat_router,
     set_agents,
 )
+from .api.ap_router import router as ap_router
 from .config.settings import get_settings, set_cli_overrides
 
 # Import ANP Receiver Service
@@ -228,6 +229,7 @@ app.include_router(chat_router, prefix="/v1", tags=["chat"])
 
 # Include agent description router (mounted at /agents)
 app.include_router(ad_router, tags=["agents"])
+app.include_router(ap_router, tags=["ap"])
 
 # Also expose /ad.json at the root for convenience/tests
 @app.get("/ad.json")
