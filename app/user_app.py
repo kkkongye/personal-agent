@@ -267,7 +267,27 @@ def user_create_agent(req: RequestCreateAgent) -> Dict[str, Any]:
         path = os.path.join(root, f"agent_manifest_{int(time.time())}.json")
         with open(path, "w", encoding="utf-8") as f:
             json.dump(manifest, f, ensure_ascii=False, indent=2)
-        return {"success": True, "agent_path": path, "manifest": manifest}
+        features = manifest.get("modules", {}).get("features", [])
+        mapping = {"text-processing": "text_processor", "news-search": "news"}
+        allowed_agents = [mapping.get(x, "") for x in features]
+        allowed_agents = [x for x in allowed_agents if x]
+        active_path = os.path.join(root, "active_agents.json")
+        with open(active_path, "w", encoding="utf-8") as f2:
+            json.dump({"allowed_agents": allowed_agents}, f2, ensure_ascii=False, indent=2)
+        bat_path = os.path.join(root, "launch_octopus.bat")
+        with open(bat_path, "w", encoding="utf-8") as bf:
+            bf.write("@echo off\n")
+            bf.write("setlocal enabledelayedexpansion\n")
+            bf.write("pushd \"%~dp0\\..\\..\\..\"\n")
+            bf.write(f"set OCTOPUS_ALLOWED_AGENTS_PATH=%CD%\\local_store\\agents\\{phc_id}\\active_agents.json\n")
+            bf.write("set PYEXE=python\n")
+            bf.write("if exist .venv\\Scripts\\python.exe set PYEXE=.venv\\Scripts\\python.exe\n")
+            bf.write("cd /d agent_provider\\octopus\n")
+            bf.write("start \"OctopusServer\" %PYEXE% -m octopus.octopus --port 9527\n")
+            bf.write("timeout /t 2 >nul\n")
+            bf.write("start \"\" http://localhost:9527/\n")
+            bf.write("popd\n")
+        return {"success": True, "agent_path": path, "manifest": manifest, "launcher": bat_path, "allowed": allowed_agents}
     except Exception:
         return {"success": False}
 

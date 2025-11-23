@@ -13,6 +13,7 @@ from openai import AsyncOpenAI, OpenAI
 from octopus.agents.base_agent import BaseAgent
 from octopus.config.settings import get_settings
 from octopus.router.agents_router import agent_interface, register_agent, router
+from octopus.router.rpc_services import get_allowed_agents
 
 logger = logging.getLogger(__name__)
 
@@ -125,11 +126,14 @@ class MasterAgent(BaseAgent):
     def _get_agent_capabilities(self) -> list[dict[str, Any]]:
         """Get detailed capabilities of all available agents."""
         agents = router.list_agents()
+        allowed = set(get_allowed_agents())
         capabilities = []
 
         for agent in agents:
             # Skip self
             if agent["name"] == "master_agent":
+                continue
+            if allowed and agent["name"] not in allowed:
                 continue
 
             # Get agent registration to access methods

@@ -10,10 +10,31 @@ while maintaining clear separation of concerns.
 """
 
 import logging
+import os
+import json
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
+_ALLOWED_AGENTS: set[str] = set()
+
+def set_allowed_agents(names: list[str]) -> None:
+    global _ALLOWED_AGENTS
+    _ALLOWED_AGENTS = set([str(n) for n in names if n])
+
+def get_allowed_agents() -> list[str]:
+    return sorted(list(_ALLOWED_AGENTS))
+
+def load_allowed_agents_from_path(path: str | None) -> None:
+    if not path:
+        return
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        names = data.get("allowed_agents") or data.get("agents") or []
+        set_allowed_agents([str(n) for n in names])
+    except Exception:
+        pass
 
 class OpenRPCGenerator:
     """
@@ -54,6 +75,8 @@ class OpenRPCGenerator:
 
         for agent in agents_list:
             agent_name = agent["name"]
+            if _ALLOWED_AGENTS and agent_name not in _ALLOWED_AGENTS:
+                continue
             agent_registration = self.agent_router.get_agent(agent_name)
 
             if not agent_registration or not agent_registration.methods:
@@ -263,6 +286,8 @@ class JSONRPCHandler:
         """
         agent_registration = self.agent_router.get_agent(agent_name)
         if not agent_registration or method_name not in agent_registration.methods:
+            return False
+        if _ALLOWED_AGENTS and agent_name not in _ALLOWED_AGENTS:
             return False
 
         method_info = agent_registration.methods[method_name]

@@ -29,6 +29,7 @@ from .core.receiver.anp_receiver import (
 )
 from .master_agent import MasterAgent
 from .utils.log_base import get_logger, setup_enhanced_logging
+from .router.rpc_services import load_allowed_agents_from_path, set_allowed_agents
 
 # Initialize enhanced logging
 setup_enhanced_logging()
@@ -88,6 +89,14 @@ async def lifespan(app: FastAPI):
 
         # Inject agents into chat router
         set_agents(master_agent, message_agent)
+
+        try:
+            allowed_path = os.environ.get("OCTOPUS_ALLOWED_AGENTS_PATH", "")
+            load_allowed_agents_from_path(allowed_path)
+            names_info = str(os.environ.get("OCTOPUS_ALLOWED_AGENTS_PATH", ""))
+            logger.info(f"Allowed agents loaded from path: {names_info}")
+        except Exception as e:
+            logger.error(f"Failed to load allowed agents: {str(e)}")
 
         # Initialize ANP Receiver Service if enabled
         if current_settings.anp_sdk_enabled:
