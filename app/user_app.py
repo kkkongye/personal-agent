@@ -599,6 +599,30 @@ def ui() -> Response:
         const payload={base_url:apBase, cmc:cmc||[], hid:hid, phc:phcObj, user_sk: window.__updSk||"", user_pk: window.__updPk||""};
         const r=await fetch('/user/update_submit',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
         const data=await r.json(); const out=document.getElementById('pa_update'); out.textContent=JSON.stringify(data,null,2);
+        try{
+          const btnId = 'updateCreateAgent';
+          let btn = document.getElementById(btnId);
+          if(!btn){
+            btn = document.createElement('button');
+            btn.id = btnId;
+            btn.textContent = '更新个人智能体';
+            const target = document.getElementById('pa_update');
+            target.insertAdjacentElement('afterend', btn);
+          }
+          let agentOut = document.getElementById('agent_update');
+          if(!agentOut){
+            agentOut = document.createElement('pre');
+            agentOut.id = 'agent_update';
+            btn.insertAdjacentElement('afterend', agentOut);
+          }
+          btn.disabled = !(data && data.PHC && data.PA);
+          btn.onclick = async ()=>{
+            const payload2 = { phc: data.PHC||{}, pa: data.PA||{}, cmc: cmc||[] };
+            const r2 = await fetch('/user/create_agent',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload2)});
+            const data2 = await r2.json();
+            agentOut.textContent = JSON.stringify(data2,null,2);
+          };
+        }catch(e){}
         };
     </script>
     </body></html>
