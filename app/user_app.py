@@ -401,7 +401,6 @@ def ui() -> Response:
       <label>Passport</label><input id=passport value="P123456789">
     </div>
     <button id=issue>1.请求 PHC</button>
-    <button id=issue>1.请求PHC</button>
     <pre id=phc></pre>
     <button id=fetchcmm disabled>2.选择PA的配置信息</button>
     <div id=cmm_ui></div>
@@ -569,7 +568,6 @@ def ui() -> Response:
           const data=await r.json(); const cmm=data.cmm; window.__updSk=String(data.sk||""); window.__updPk=String(data.pk||""); window.__lastCMM=cmm;
           const updUI=document.getElementById('upd_cmm_ui');
           const htmlRows=(cmm||[]).map((row,i)=>{ const opts=row.map((opt,j)=>`<label><input type=radio name=\"upd_row_${i}\" value='${j}' ${j===0?"checked":""}>${zhLabelMap[opt.label]||opt.label}</label>`).join(' '); return `<div>${zhCat[i]}：${opts}</div>`; }).join('');
-        const htmlRows=(cmm||[]).map((row,i)=>{ const opts=row.map((opt,j)=>`<label><input type=radio name=\"upd_row_${i}\" value='${j}' ${j===0?"checked":""}>${zhLabelMap[opt.label]||opt.label}</label>`).join(' '); return `<div>${zhCat[i]}：${opts}</div>`; }).join('');
           updUI.innerHTML = htmlRows;
           document.getElementById('submitUpdate').disabled = !((cmm && cmm.length>0) && (window.__updSk && window.__updPk));
         }catch(e){ out.textContent='Update PA failed: '+(e&&e.message?e.message:'unknown'); }

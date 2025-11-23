@@ -1,0 +1,21 @@
+# ANP Gateway vhost 配置示例
+# 将本段加入你的网关配置文件（或作为单独文件被 include），然后重载/重启网关。
+
+vhosts:
+  - host: octopus-b.local         # 你的对外主机名（与 Host 头匹配）
+    # 说明：很多网关只按 Host 匹配，不需要端口；若你的网关需要按入站监听端口区分，请设置为网关 HTTP 监听端口（如 8080）。
+    # port: 8080
+    target:
+      kind: receiver              # 通过 ANP Receiver 转发（经 WebSocket 通道）
+      did: did:wba:didhost.cc:test:public  # 你的 DID（与 B 实例 Receiver 一致）
+      pathPrefix: /               # 整站转发
+    options:
+      preserveHost: true          # 保留 Host=octopus-b.local，便于后端正确路由
+      healthCheck:
+        path: /health
+        interval: 10s
+
+# 使用须知：
+# - 如果你的网关实现将 vhosts 放在单独键位（不在根键 vhosts 下），请调整层级以符合你的网关规范。
+# - 如果是容器部署，请将该文件以 volume 方式挂载，并在主配置中 include。
+# - 应用配置后，用 http://octopus-b.local:8080/ad.json 验证应返回 application/json（来自 B 实例）。
