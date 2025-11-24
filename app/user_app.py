@@ -232,6 +232,19 @@ def user_cmm_submit(req: RequestCMMSubmit) -> Dict[str, Any]:
         obj["memory_path"] = full_path
     except Exception:
         obj["memory_path"] = None
+    try:
+        chain = ((obj.get("PHC") or {}).get("ASO") or {}).get("HASH_CHAIN") or {}
+        chain_head = chain.get("head")
+        local_prev = sha256_hex(str(hid_use))
+        idx = 0
+        for row in (req.cmc or []):
+            for it in (row or []):
+                data = canonical_json({"label": str(it.get("label")), "idx": idx})
+                local_prev = sha256_hex(local_prev + data)
+                idx += 1
+        obj["verified_hash_chain_user"] = (str(local_prev) == str(chain_head or ""))
+    except Exception:
+        obj["verified_hash_chain_user"] = False
     return obj
 
 @app.post('/user/create_agent')
@@ -247,10 +260,10 @@ def user_create_agent(req: RequestCreateAgent) -> Dict[str, Any]:
             "id": phc_id,
             "did": did,
             "modules": {
-                "inputs": [m.get("label") for m in (cmc[0] if len(cmc)>0 else [])],
-                "reasoning": [m.get("label") for m in (cmc[1] if len(cmc)>1 else [])],
-                "knowledge": [m.get("label") for m in (cmc[2] if len(cmc)>2 else [])],
-                "data_access": [m.get("label") for m in (cmc[3] if len(cmc)>3 else [])],
+                "features": [m.get("label") for m in (cmc[0] if len(cmc)>0 else [])],
+                "inputs": [m.get("label") for m in (cmc[1] if len(cmc)>1 else [])],
+                "reasoning": [m.get("label") for m in (cmc[2] if len(cmc)>2 else [])],
+                "knowledge": [m.get("label") for m in (cmc[3] if len(cmc)>3 else [])],
                 "outputs": [m.get("label") for m in (cmc[4] if len(cmc)>4 else [])],
             },
             "binding": {
@@ -269,7 +282,27 @@ def user_create_agent(req: RequestCreateAgent) -> Dict[str, Any]:
         path = os.path.join(root, f"agent_manifest_{int(time.time())}.json")
         with open(path, "w", encoding="utf-8") as f:
             json.dump(manifest, f, ensure_ascii=False, indent=2)
-        return {"success": True, "agent_path": path, "manifest": manifest}
+        features = manifest.get("modules", {}).get("features", [])
+        mapping = {"text-processing": "text_processor", "news-search": "news"}
+        allowed_agents = [mapping.get(x, "") for x in features]
+        allowed_agents = [x for x in allowed_agents if x]
+        active_path = os.path.join(root, "active_agents.json")
+        with open(active_path, "w", encoding="utf-8") as f2:
+            json.dump({"allowed_agents": allowed_agents}, f2, ensure_ascii=False, indent=2)
+        bat_path = os.path.join(root, "launch_octopus.bat")
+        with open(bat_path, "w", encoding="utf-8") as bf:
+            bf.write("@echo off\n")
+            bf.write("setlocal enabledelayedexpansion\n")
+            bf.write("pushd \"%~dp0\\..\\..\\..\"\n")
+            bf.write(f"set OCTOPUS_ALLOWED_AGENTS_PATH=%CD%\\local_store\\agents\\{phc_id}\\active_agents.json\n")
+            bf.write("set PYEXE=python\n")
+            bf.write("if exist .venv\\Scripts\\python.exe set PYEXE=.venv\\Scripts\\python.exe\n")
+            bf.write("cd /d agent_provider\\octopus\n")
+            bf.write("start \"OctopusServer\" %PYEXE% -m octopus.octopus --port 9527\n")
+            bf.write("timeout /t 2 >nul\n")
+            bf.write("start \"\" http://localhost:9527/\n")
+            bf.write("popd\n")
+        return {"success": True, "agent_path": path, "manifest": manifest, "launcher": bat_path, "allowed": allowed_agents}
     except Exception:
         return {"success": False}
 
@@ -402,24 +435,24 @@ def ui() -> Response:
       <label>Email</label><input id=email value="alice@example.com">
       <label>Passport</label><input id=passport value="P123456789"><label>Photo</label><input id=picfile type=file accept="image/*">
     </div>
-    <button id=issue>1.Request PHC</button>
+    <button id=issue>1.请求 PHC</button>
     <pre id=phc></pre>
-    <button id=fetchcmm disabled>2.Fetch CMM</button>
+    <button id=fetchcmm disabled>2.选择PA的配置信息</button>
     <div id=cmm_ui></div>
-    <button id=submitcmc disabled>Submit CMM</button>
+    <button id=submitcmc disabled>提交PA的配置信息</button>
     <pre id=pa_cmm></pre>
     <pre id=hash_ch></pre>
     <pre id=hash_cch></pre>
     <pre id=hash_status></pre>
 
-    <button id=createAgent disabled>3.Create Personal Agent</button>
+    <button id=createAgent disabled>3.创建个人智能体</button>
     <pre id=agent_out></pre>
     <button id=recoverpa disabled>4.PA丢失，恢复PA</button>
     <button id=recoverboth>PHC与PA都丢失，恢复PA</button>
     <pre id=pa_recover></pre>
-    <button id=updatepa disabled>5.Update PA</button>
+    <button id=updatepa disabled>5.更新PA的配置信息</button>
     <div id=upd_cmm_ui></div>
-    <button id=submitUpdate disabled>Submit Update</button>
+    <button id=submitUpdate disabled>提交更新</button>
     <pre id=pa_update></pre>
     
     
@@ -438,6 +471,40 @@ def ui() -> Response:
     const hashStatus=document.getElementById('hash_status');
         const paRecover=document.getElementById('pa_recover');
     const cmmUI=document.getElementById('cmm_ui');
+    const zhCat=['功能','输入','推理','知识','输出'];
+    const zhLabelMap={
+      'text':'文本',
+      'voice':'语音',
+      'image':'图像',
+      'video':'视频',
+      'sensor':'传感器',
+      'system-event':'系统事件',
+      'rule-engine':'规则引擎',
+      'bayesian-net':'贝叶斯网络',
+      'fuzzy-logic':'模糊逻辑',
+      'llm':'大模型',
+      'retrieval':'检索',
+      'neural-network':'神经网络',
+      'planner':'规划',
+      'safety-filter':'安全过滤',
+      'local-memory':'本地记忆',
+      'long-term-memory':'长期记忆',
+      'vector-index':'向量索引',
+      'knowledge-base':'知识库',
+      'shared-org-data':'组织共享数据',
+      'browser':'浏览器',
+      'external-api':'外部API',
+      'database':'数据库',
+      'blockchain':'区块链',
+      'ipfs':'IPFS',
+      'iot-device':'物联网设备',
+      'cloud-storage':'云存储',
+      'speech':'语音',
+      'notification':'通知',
+      'json-api':'JSON API',
+      'actuation':'执行'
+    };
+    const zhLabelMapExtra={ 'text-processing':'文本处理', 'news-search':'新闻查询' };
         let phcObj=null;
         let cmmObj=null;
         let cmcObj=null;
@@ -469,21 +536,19 @@ def ui() -> Response:
       const data=await r.json(); cmmObj=data.cmm; cmcObj=(cmmObj||[]).map(row=>row[0]);
       window.__cmmSk = String(data.sk||""); window.__cmmPk = String(data.pk||"");
         const htmlRows=(cmmObj||[]).map((row,i)=>{
-            const opts=row.map((opt,j)=>`<label><input type=radio name=\"row_${i}\" value='${j}' ${j===0?"checked":""}>${opt.label}</label>`).join(' ');
-            return `<div>Row ${i+1}: ${opts}</div>`;
+            const opts=row.map((opt,j)=>`<label><input type=checkbox name=\"row_${i}\" value='${j}'>${(zhLabelMap[opt.label]||zhLabelMapExtra[opt.label]||opt.label)}</label>`).join(' ');
+            return `<div>${zhCat[i]}：${opts}</div>`;
         }).join('');
-      cmmUI.innerHTML = htmlRows + `<div><button id='confirmcmc'>Confirm Selection</button></div>`;
-      document.getElementById('confirmcmc').onclick = ()=>{
-        cmcObj = (cmmObj||[]).map((row,i)=>{ const idx = Number((document.querySelector(`input[name='row_${i}']:checked`)||{value:0}).value); return row[idx]; });
-        const keysReady = (window.__cmmSk && window.__cmmPk);
-        document.getElementById('submitcmc').disabled = !((cmcObj && cmcObj.length>0) && keysReady);
-      };
+      cmmUI.innerHTML = htmlRows;
+      document.getElementById('submitcmc').disabled = !(window.__cmmSk && window.__cmmPk);
         };
         
         document.getElementById('submitcmc').onclick = async ()=>{
         const apBase = 'http://127.0.0.1:8002';
         const hid = idnum.value? (await (async()=>{return (idnum.value)})()) : '';
-        const r=await fetch('/user/cmm_submit',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({base_url:apBase, cmc:cmcObj||[], hid:hid, phc:phcObj, user_sk: window.__cmmSk||"", user_pk: window.__cmmPk||""})});
+        const cmc = (cmmObj||[]).map((row,i)=>{ const nodes = Array.from(document.querySelectorAll(`input[name='row_${i}']:checked`)); const idxs = nodes.map(n=>Number(n.value)); return row.filter((_,j)=>idxs.includes(j)); });
+        cmcObj = cmc;
+        const r=await fetch('/user/cmm_submit',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({base_url:apBase, cmc:cmc||[], hid:hid, phc:phcObj, user_sk: window.__cmmSk||"", user_pk: window.__cmmPk||""})});
       const data=await r.json();
       paCmm.textContent=JSON.stringify(data,null,2);
       hashCH.textContent = 'CH: ' + String(data.CH || '');
@@ -546,7 +611,7 @@ def ui() -> Response:
           const r=await fetch('/user/update_init',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({base_url:apBase, phc:phcObj, user})});
           const data=await r.json(); const cmm=data.cmm; window.__updSk=String(data.sk||""); window.__updPk=String(data.pk||""); window.__lastCMM=cmm;
           const updUI=document.getElementById('upd_cmm_ui');
-          const htmlRows=(cmm||[]).map((row,i)=>{ const opts=row.map((opt,j)=>`<label><input type=radio name=\"upd_row_${i}\" value='${j}' ${j===0?"checked":""}>${opt.label}</label>`).join(' '); return `<div>Update Row ${i+1}: ${opts}</div>`; }).join('');
+          const htmlRows=(cmm||[]).map((row,i)=>{ const opts=row.map((opt,j)=>`<label><input type=checkbox name=\"upd_row_${i}\" value='${j}'>${(zhLabelMap[opt.label]||zhLabelMapExtra[opt.label]||opt.label)}</label>`).join(' '); return `<div>${zhCat[i]}：${opts}</div>`; }).join('');
           updUI.innerHTML = htmlRows;
           document.getElementById('submitUpdate').disabled = !((cmm && cmm.length>0) && (window.__updSk && window.__updPk));
         }catch(e){ out.textContent='Update PA failed: '+(e&&e.message?e.message:'unknown'); }
@@ -555,10 +620,34 @@ def ui() -> Response:
         document.getElementById('submitUpdate').onclick = async ()=>{
         const apBase = apEl && apEl.value ? apEl.value : 'http://127.0.0.1:8002';
         const hid = idnum.value? (await (async()=>{return (idnum.value)})()) : '';
-        const cmc = (window.__lastCMM||[]).map((row,i)=>{ const idx = Number((document.querySelector(`input[name='upd_row_${i}']:checked`)||{value:0}).value); return row[idx]; });
+        const cmc = (window.__lastCMM||[]).map((row,i)=>{ const nodes = Array.from(document.querySelectorAll(`input[name='upd_row_${i}']:checked`)); const idxs = nodes.map(n=>Number(n.value)); return row.filter((_,j)=>idxs.includes(j)); });
         const payload={base_url:apBase, cmc:cmc||[], hid:hid, phc:phcObj, user_sk: window.__updSk||"", user_pk: window.__updPk||""};
         const r=await fetch('/user/update_submit',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
         const data=await r.json(); const out=document.getElementById('pa_update'); out.textContent=JSON.stringify(data,null,2);
+        try{
+          const btnId = 'updateCreateAgent';
+          let btn = document.getElementById(btnId);
+          if(!btn){
+            btn = document.createElement('button');
+            btn.id = btnId;
+            btn.textContent = '更新个人智能体';
+            const target = document.getElementById('pa_update');
+            target.insertAdjacentElement('afterend', btn);
+          }
+          let agentOut = document.getElementById('agent_update');
+          if(!agentOut){
+            agentOut = document.createElement('pre');
+            agentOut.id = 'agent_update';
+            btn.insertAdjacentElement('afterend', agentOut);
+          }
+          btn.disabled = !(data && data.PHC && data.PA);
+          btn.onclick = async ()=>{
+            const payload2 = { phc: data.PHC||{}, pa: data.PA||{}, cmc: cmc||[] };
+            const r2 = await fetch('/user/create_agent',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload2)});
+            const data2 = await r2.json();
+            agentOut.textContent = JSON.stringify(data2,null,2);
+          };
+        }catch(e){}
         };
     </script>
     </body></html>

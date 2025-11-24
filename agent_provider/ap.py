@@ -196,6 +196,11 @@ def cmm_submit(payload: CMMSubmitRequest) -> Dict[str, Any]:
             _apdb_put(hid, {"CMC": cmc, "CMI": str(cmi_int), "r_bind2": str(rb2), "ts": datetime.utcnow().isoformat() + "Z"})
         except Exception:
             pass
+        try:
+            chain = _compute_hash_chain(hid, cmc)
+            phc_mod.setdefault("ASO", {}).setdefault("HASH_CHAIN", chain)
+        except Exception:
+            chain = {"head": None, "entries": []}
         enc = _encrypt_to_user(upub, {
             "r_bind2": str(rb2),
             "r_ap": str(r_ap),
@@ -207,6 +212,7 @@ def cmm_submit(payload: CMMSubmitRequest) -> Dict[str, Any]:
             "verified_af": verified_af,
             "ap_pk": str(AP_PK),
             "tp_pk": str(TP_DL_PK),
+            "HASH_CHAIN_HEAD": str(chain.get("head")) if chain.get("head") else None,
         })
         return {"success": True, "par": enc}
     except Exception as e:
@@ -286,46 +292,28 @@ def recover_pa(payload: RecoverInbound) -> Dict[str, Any]:
 def _build_cmm_matrix(hid: str, phc: Dict[str, Any]) -> List[List[Dict[str, Any]]]:
     return [
         [
+            {"id": "feature_text_processing", "label": "text-processing", "params": {}},
+            {"id": "feature_news_search", "label": "news-search", "params": {}},
+        ],
+        [
             {"id": "input_text", "label": "text", "params": {}},
             {"id": "input_voice", "label": "voice", "params": {}},
             {"id": "input_image", "label": "image", "params": {}},
-            {"id": "input_video", "label": "video", "params": {}},
-            {"id": "input_sensor", "label": "sensor", "params": {}},
-            {"id": "input_system_event", "label": "system-event", "params": {}},
         ],
         [
-            {"id": "reason_rule_engine", "label": "rule-engine", "params": {}},
-            {"id": "reason_bayesian_net", "label": "bayesian-net", "params": {}},
-            {"id": "reason_fuzzy_logic", "label": "fuzzy-logic", "params": {}},
             {"id": "reason_llm", "label": "llm", "params": {}},
             {"id": "reason_retrieval", "label": "retrieval", "params": {}},
             {"id": "reason_neural_network", "label": "neural-network", "params": {}},
-            {"id": "reason_planner", "label": "planner", "params": {}},
-            {"id": "reason_safety_filter", "label": "safety-filter", "params": {}},
         ],
         [
             {"id": "knowledge_local_memory", "label": "local-memory", "params": {}},
             {"id": "knowledge_long_term_memory", "label": "long-term-memory", "params": {}},
-            {"id": "knowledge_vector_index", "label": "vector-index", "params": {}},
             {"id": "knowledge_base", "label": "knowledge-base", "params": {}},
-            {"id": "knowledge_shared_org_data", "label": "shared-org-data", "params": {}},
-        ],
-        [
-            {"id": "data_browser", "label": "browser", "params": {}},
-            {"id": "data_external_api", "label": "external-api", "params": {}},
-            {"id": "data_database", "label": "database", "params": {}},
-            {"id": "data_blockchain", "label": "blockchain", "params": {}},
-            {"id": "data_ipfs", "label": "ipfs", "params": {}},
-            {"id": "data_iot_device", "label": "iot-device", "params": {}},
-            {"id": "data_cloud_storage", "label": "cloud-storage", "params": {}},
         ],
         [
             {"id": "output_text", "label": "text", "params": {}},
             {"id": "output_speech", "label": "speech", "params": {}},
             {"id": "output_image", "label": "image", "params": {}},
-            {"id": "output_notification", "label": "notification", "params": {}},
-            {"id": "output_json_api", "label": "json-api", "params": {}},
-            {"id": "output_actuation", "label": "actuation", "params": {}},
         ],
     ]
 
@@ -355,6 +343,20 @@ def _apdb_get(hid: str) -> Dict[str, Any] | None:
         return None
 
  
+def _compute_hash_chain(hid: str, cmc: List[List[Dict[str, Any]]]) -> Dict[str, Any]:
+    from user.crypto import canonical_json, sha256_hex
+    prev = sha256_hex(str(hid))
+    entries: List[Dict[str, Any]] = []
+    idx = 0
+    for row in (cmc or []):
+        for item in (row or []):
+            label = str(item.get("label") or "")
+            data = canonical_json({"label": label, "idx": idx})
+            h = sha256_hex(prev + data)
+            entries.append({"idx": idx, "label": label, "prev": prev, "hash": h})
+            prev = h
+            idx += 1
+    return {"head": prev, "entries": entries}
 
 class UpdateInitRequest(BaseModel):
     ar: Dict[str, Any]
@@ -447,6 +449,11 @@ def update_submit(payload: UpdateSubmitRequest) -> Dict[str, Any]:
             _apdb_put(hid, {"CMC": cmc, "CMI": str(cmi_int), "r_bind2": str(rb3), "ts": datetime.utcnow().isoformat() + "Z"})
         except Exception:
             pass
+        try:
+            chain = _compute_hash_chain(hid, cmc)
+            phc_mod.setdefault("ASO", {}).setdefault("HASH_CHAIN", chain)
+        except Exception:
+            chain = {"head": None, "entries": []}
         enc = _encrypt_to_user(upub, {
             "r_bind2": str(rb3),
             "r_ap": str(r_ap3),
@@ -458,6 +465,7 @@ def update_submit(payload: UpdateSubmitRequest) -> Dict[str, Any]:
             "verified_af": (str((phc_mod.get("ASO") or {}).get("TPM", {}).get("AF")) == str(af_calc)),
             "ap_pk": str(AP_PK),
             "tp_pk": str(TP_DL_PK),
+            "HASH_CHAIN_HEAD": str(chain.get("head")) if chain.get("head") else None,
         })
         return {"success": True, "par": enc}
     except Exception as e:
