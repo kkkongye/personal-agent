@@ -13,6 +13,7 @@ class PIIModel(BaseModel):
 class BIModel(BaseModel):
     last_login_ip: Optional[str] = None
     passport_number: Optional[str] = None
+    pic_string: Optional[str] = None
 
 
 class UserInfo(BaseModel):

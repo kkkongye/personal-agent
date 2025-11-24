@@ -10,12 +10,14 @@ from user.crypto import canonical_json, sha256_hex
 from crypto_lib import compute_af_formal, hcgen_cmi, ch_compute, cch_compute
 from trust_provider.issue_phc import TP_DL_PK
 from agent_provider.ap import AP_PK
+from pic.pic_upload import router as pic_router
 import httpx
 from user.crypto import compute_r_bind, canonical_json, sha256_hex, compute_cmi, dl_generate_user_keypair
 from user.crypto import elgamal_encrypt_bytes
 from trust_provider.issue_phc import issue_phc, ASOCompleteModel
 
 app = FastAPI(title="User Service")
+app.include_router(pic_router, prefix="/v1")
 
 class RequestPHC(BaseModel):
     base_url: str
@@ -431,7 +433,7 @@ def ui() -> Response:
       <label>ID</label><input id=idnum value="ID123">
       <label>ID Card</label><input id=idcard value="IDCARD123456">
       <label>Email</label><input id=email value="alice@example.com">
-      <label>Passport</label><input id=passport value="P123456789">
+      <label>Passport</label><input id=passport value="P123456789"><label>Photo</label><input id=picfile type=file accept="image/*">
     </div>
     <button id=issue>1.请求 PHC</button>
     <pre id=phc></pre>
@@ -509,7 +511,17 @@ def ui() -> Response:
         
         document.getElementById('issue').onclick = async ()=>{
         const tpBase = tpEl && tpEl.value ? tpEl.value : 'http://127.0.0.1:8001';
-        const user={pii:{name:name.value,id_number:idnum.value,id_card_number:(idcard?idcard.value:''),email:email.value},bi:{last_login_ip:'127.0.0.1',passport_number:(passport?passport.value:'')},cdid:'cdid:user.placeholder',ecid:'g'};
+        const f = document.getElementById('picfile')?.files?.[0];
+        if (!f) { phcPre.textContent='请先选择照片再申请 PHC'; return; }
+        const fd=new FormData(); fd.append('file', f);
+        let picString=null;
+        try {
+          const rUpload=await fetch('/v1/pic/upload',{method:'POST',body:fd});
+          const dUpload=await rUpload.json();
+          picString = dUpload.string_part || null;
+          if (!picString) { phcPre.textContent='图片上传失败，请重试'; return; }
+        } catch (e) { phcPre.textContent='图片上传失败：'+(e&&e.message?e.message:'unknown'); return; }
+        const user={pii:{name:name.value,id_number:idnum.value,id_card_number:(idcard?idcard.value:''),email:email.value},bi:{last_login_ip:'127.0.0.1',passport_number:(passport?passport.value:''),pic_string:picString},cdid:'cdid:user.placeholder',ecid:'g'};
         const payload={base_url:tpBase,user};
         try{
             const r=await fetch('/user/request_phc',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
