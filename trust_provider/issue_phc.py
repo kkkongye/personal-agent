@@ -352,9 +352,22 @@ def _find_phc_by_did(did: str) -> Dict[str, Any] | None:
 def recover_phc(payload: RecoverPHCInbound) -> Dict[str, Any]:
     try:
         decrypted = elgamal_decrypt_bytes(TP_DL_SK, payload.rec)
-        pt = json.loads(decrypted.decode())
+        pt_raw = decrypted.decode()
+        try:
+            pt = json.loads(pt_raw)
+        except Exception:
+            pt = {"raw": pt_raw}
     except Exception:
         raise HTTPException(status_code=400, detail="decrypt_failed")
+    try:
+        if isinstance(pt, str):
+            pt = json.loads(pt)
+        if isinstance(pt.get("PII"), str):
+            pt["PII"] = json.loads(pt.get("PII"))
+        if isinstance(pt.get("BI"), str):
+            pt["BI"] = json.loads(pt.get("BI"))
+    except Exception:
+        pass
     idv = str((pt.get("PII") or {}).get("id_number") or pt.get("ID") or "")
     bi = pt.get("BI") or {}
     pii = pt.get("PII") or {}
