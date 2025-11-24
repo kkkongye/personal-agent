@@ -1,2 +1,7 @@
+local_store/
+ipfs_store/
+app/__pycache__/
 __pycache__/
-*.pyc
+**/__pycache__/
+agent_provider/__pycache__/ap.cpython-312.pyc
+app/__pycache__/user_app.cpython-312.pyc
