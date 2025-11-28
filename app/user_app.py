@@ -296,6 +296,22 @@ def user_create_agent(req: RequestCreateAgent) -> Dict[str, Any]:
             bf.write("set PYEXE=python\n")
             bf.write("if exist .venv\\Scripts\\python.exe set PYEXE=.venv\\Scripts\\python.exe\n")
             bf.write("cd /d agent_provider\\octopus\n")
+            reason = manifest.get("modules", {}).get("reasoning", [])
+            labels = [str(m or "") for m in reason]
+            prov = "openai"
+            try:
+                lab_set = set(labels)
+                if ("rag-openai" in lab_set) and ("rag-deepseek" in lab_set):
+                    prov = "openai"
+                elif ("rag-openai" in lab_set):
+                    prov = "openai"
+                elif ("rag-deepseek" in lab_set):
+                    prov = "deepseek"
+                else:
+                    prov = "openai"
+            except Exception:
+                prov = "openai"
+            bf.write(f"set MODEL_PROVIDER={prov}\n")
             bf.write("start \"OctopusServer\" %PYEXE% -m octopus.octopus --port 9527\n")
             bf.write("timeout /t 2 >nul\n")
             bf.write("start \"\" http://localhost:9527/\n")
@@ -502,7 +518,16 @@ def ui() -> Response:
       'json-api':'JSON API',
       'actuation':'执行'
     };
-    const zhLabelMapExtra={ 'text-processing':'文本处理', 'news-search':'新闻查询' };
+    const zhLabelMapExtra={
+      'text-processing':'文本处理',
+      'news-search':'新闻查询',
+      'payment':'支付',
+      'web-browsing':'浏览网页',
+      'rag-openai':'RAG+OPENAI',
+      'rag-deepseek':'RAG+deepseek',
+      'knowledge-pro':'专业知识库',
+      'ppt':'ppt'
+    };
         let phcObj=null;
         let cmmObj=null;
         let cmcObj=null;

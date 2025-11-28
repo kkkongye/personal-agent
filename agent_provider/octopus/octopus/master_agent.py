@@ -55,22 +55,25 @@ class MasterAgent(BaseAgent):
         # Get settings
         settings = get_settings()
 
-        # Validate model provider
+        # Validate and load model provider
         self.model_provider = settings.model_provider.lower()
-        if self.model_provider != "openai":
-            raise ValueError(
-                f"Unsupported model provider: {self.model_provider}. Currently only 'openai' is supported."
-            )
+        if self.model_provider == "openai":
+            self.api_key = api_key or settings.openai_api_key
+            self.model = model or settings.openai_model
+            self.base_url = base_url or settings.openai_base_url
+        elif self.model_provider == "deepseek":
+            self.api_key = api_key or settings.deepseek_api_key
+            self.model = model or settings.deepseek_model
+            self.base_url = base_url or settings.deepseek_base_url
+        else:
+            raise ValueError(f"Unsupported model provider: {self.model_provider}")
 
-        # OpenAI setup using settings
-        self.api_key = api_key or settings.openai_api_key
         if not self.api_key:
             raise ValueError(
-                "OpenAI API key is required. Set OPENAI_API_KEY in .env file or pass api_key parameter."
+                "API key is required for the selected provider. Set the corresponding environment variable in .env (e.g., OPENAI_API_KEY or DEEPSEEK_API_KEY)."
             )
 
-        self.model = model or settings.openai_model
-        self.base_url = base_url or settings.openai_base_url
+        # Common generation settings
         self.temperature = settings.openai_temperature
         self.max_tokens = settings.openai_max_tokens
 
@@ -94,18 +97,12 @@ class MasterAgent(BaseAgent):
 
     def _initialize_client(self):
         """Initialize the appropriate client based on model provider."""
-        if self.model_provider == "openai":
-            # Create OpenAI client with proper Azure OpenAI configuration
-            client_kwargs = {"api_key": self.api_key}
-
-            # Use base_url directly without complex Azure URL construction
-            if self.base_url:
-                client_kwargs["base_url"] = self.base_url
-
-            self.client = OpenAI(**client_kwargs)
-            self.async_client = AsyncOpenAI(**client_kwargs)
-        else:
-            raise ValueError(f"Unsupported model provider: {self.model_provider}")
+        # OpenAI-compatible client initialization for both providers
+        client_kwargs = {"api_key": self.api_key}
+        if self.base_url:
+            client_kwargs["base_url"] = self.base_url
+        self.client = OpenAI(**client_kwargs)
+        self.async_client = AsyncOpenAI(**client_kwargs)
 
     def initialize(self):
         """Custom initialization."""

@@ -130,6 +130,10 @@ class Settings(BaseSettings):
     openai_model: str | None = None
     openai_temperature: float | None = None
     openai_max_tokens: int | None = None
+    # DEEPSEEK CONFIGURATION
+    deepseek_api_key: str | None = None
+    deepseek_base_url: str | None = "https://api.deepseek.com/v1"
+    deepseek_model: str | None = "deepseek-chat"
     # NEWS API
     newsapi_api_key: str | None = None
 
