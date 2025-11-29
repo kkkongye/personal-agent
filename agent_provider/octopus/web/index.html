@@ -46,12 +46,17 @@
                         rows="1"
                         maxlength="2000"
                     ></textarea>
+                    <label for="imageInput" class="sr-only">选择图片</label>
+                    <input id="imageInput" type="file" accept="image/*" title="选择图片" aria-label="选择图片" aria-labelledby="addImageButton" style="position:absolute; left:-9999px; width:1px; height:1px; opacity:0;" />
+                    <button id="addImageButton" class="add-image-button" type="button" aria-label="添加图片" title="添加图片">＋</button>
+                    <span id="imageFileName" class="image-filename"></span>
                     <button id="sendButton" class="send-button" type="button" aria-label="发送" title="发送" disabled>
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                             <path d="M2 21L23 12L2 3V10L17 12L2 14V21Z" fill="currentColor"/>
                         </svg>
                     </button>
                 </div>
+                <div class="image-preview" id="imagePreview" aria-live="polite" aria-label="图片预览"></div>
                 <div class="input-footer">
                     <span class="character-count" id="characterCount">0/2000</span>
                 </div>

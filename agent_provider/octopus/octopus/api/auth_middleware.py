@@ -35,6 +35,8 @@ EXEMPT_PATHS = [
     "/wba/user/",  # Allow access to DID documents
     "/",  # Allow access to root endpoint
     "/v1/chat",
+    "/v1/vision",
+    "/v1/ui-config",
     "/static/",  # Allow access to all paths under /static/
     "/agents/jsonrpc",  # Allow JSON-RPC calls for testing
     "/agents/ad.json",  # Allow public access to agent description

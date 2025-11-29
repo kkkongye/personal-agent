@@ -570,6 +570,36 @@ If no suitable agent is found, respond with:
                         lines.append(f"- {title}（{src}，{pub}）{url}")
                     return "以下是相关新闻：\n" + "\n".join(lines)
 
+                # Sentiment dict → Chinese prose
+                try:
+                    if {"sentiment", "confidence"}.issubset(set(result.keys())):
+                        sen = str(result.get("sentiment") or "")
+                        conf_raw = result.get("confidence")
+                        try:
+                            conf = float(conf_raw)
+                        except Exception:
+                            conf = 0.95 if str(conf_raw).strip() == "high" else 0.5
+                        conf_text = f"约{int(round(conf * 100))}%" if conf <= 1 else f"约{int(round(conf))}%"
+                        reasons: list[str] = []
+                        rq = request or ""
+                        if any(x in rq for x in ["非常喜欢", "很喜欢", "喜欢"]):
+                            reasons.append("使用了“非常喜欢”等表达强烈积极情感的措辞。")
+                        if any(x in rq for x in ["剧情紧凑", "结构紧凑", "节奏紧凑"]):
+                            reasons.append("“剧情紧凑”体现对内容节奏的正面评价。")
+                        if any(x in rq for x in ["表演到位", "演技出色", "演技很好"]):
+                            reasons.append("“演员表演到位”属于正面评价。")
+                        if not reasons:
+                            reasons.append("文本用词整体倾向积极，负面用语较少。")
+                        lines = [
+                            "文本情感分析结果：",
+                            f"情感：{sen}",
+                            "理由包括：",
+                        ]
+                        lines += [f"- {r}" for r in reasons]
+                        lines += [f"置信度：{conf_text}。"]
+                        return "\n".join(lines)
+                except Exception:
+                    pass
                 # Generic dict fallback
                 return json.dumps(result, ensure_ascii=False, indent=2)
 

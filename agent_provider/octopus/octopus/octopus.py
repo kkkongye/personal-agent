@@ -296,6 +296,18 @@ async def get_info():
     }
 
 
+@app.get("/v1/ui-config")
+async def get_ui_config():
+    import os
+    val = str(os.environ.get("INPUTS_INCLUDE_IMAGE", "")).lower().strip()
+    if val in ("0", "false", "no"):
+        allow_image = False
+    else:
+        # 默认允许，只有明确关闭时才隐藏
+        allow_image = True
+    return {"allow_image_input": allow_image}
+
+
 @app.get("/anp/status")
 async def get_anp_status():
     """Get ANP Receiver Service status."""

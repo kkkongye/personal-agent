@@ -312,6 +312,12 @@ def user_create_agent(req: RequestCreateAgent) -> Dict[str, Any]:
             except Exception:
                 prov = "openai"
             bf.write(f"set MODEL_PROVIDER={prov}\n")
+            inputs = manifest.get("modules", {}).get("inputs", [])
+            try:
+                allow_img = ("image" in [str(x or "") for x in inputs])
+            except Exception:
+                allow_img = False
+            bf.write(f"set INPUTS_INCLUDE_IMAGE={'true' if allow_img else 'false'}\n")
             bf.write("start \"OctopusServer\" %PYEXE% -m octopus.octopus --port 9527\n")
             bf.write("timeout /t 2 >nul\n")
             bf.write("start \"\" http://localhost:9527/\n")

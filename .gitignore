@@ -5,3 +5,5 @@ __pycache__/
 **/__pycache__/
 agent_provider/__pycache__/ap.cpython-312.pyc
 app/__pycache__/user_app.cpython-312.pyc
+agent_provider/octopus/web/uploads/*
+!agent_provider/octopus/web/uploads/.gitkeep
