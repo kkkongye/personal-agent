@@ -315,7 +315,9 @@ async def get_ui_config():
     else:
         # 默认允许，只有明确关闭时才隐藏
         allow_image = True
-    return {"allow_image_input": allow_image}
+    sval = str(os.environ.get("OUTPUTS_INCLUDE_SPEECH", "")).lower().strip()
+    allow_speech = sval in ("1", "true", "yes")
+    return {"allow_image_input": allow_image, "allow_speech_output": allow_speech}
 
 
 @app.get("/anp/status")

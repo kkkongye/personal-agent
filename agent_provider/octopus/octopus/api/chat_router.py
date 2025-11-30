@@ -42,6 +42,18 @@ class VisionResponse(BaseModel):
     request_id: str
     timestamp: str
 
+class TTSRequest(BaseModel):
+    text: str
+    voice: str | None = None
+    format: str | None = None
+
+class TTSResponse(BaseModel):
+    success: bool
+    url: str | None = None
+    error: str | None = None
+    request_id: str
+    timestamp: str
+
 
 class StatusResponse(BaseModel):
     status: str
@@ -193,3 +205,45 @@ async def vision(prompt: str = Form(""), image: UploadFile = File(...)):
         return VisionResponse(success=True, response=text, request_id=request_id, timestamp=timestamp)
     except Exception as e:
         return VisionResponse(success=False, error=str(e), request_id=request_id, timestamp=timestamp)
+
+
+@router.post("/tts", response_model=TTSResponse)
+async def tts(req: TTSRequest):
+    request_id = str(uuid.uuid4())
+    timestamp = datetime.now().isoformat()
+    try:
+        import httpx
+        from pathlib import Path
+        from octopus.config.settings import get_settings
+        settings = get_settings()
+        base_url = settings.openai_base_url or "https://api.openai.com/v1"
+        tts_url = base_url.rstrip("/") + ("/audio/speech" if base_url.endswith("/v1") else "/v1/audio/speech")
+        headers = {
+            "Authorization": f"Bearer {settings.openai_api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": settings.tts_model or "tts-1",
+            "input": req.text,
+            "voice": req.voice or settings.tts_voice or "alloy",
+            "response_format": req.format or settings.tts_format or "wav",
+        }
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(tts_url, json=payload, headers=headers)
+            resp.raise_for_status()
+            ctype = resp.headers.get("Content-Type", "")
+            data_bytes = resp.content
+        web_dir = Path(__file__).resolve().parents[2] / "web"
+        tts_dir = web_dir / "tts"
+        tts_dir.mkdir(parents=True, exist_ok=True)
+        ext = (payload["response_format"] or "wav").lower()
+        fname = f"{uuid.uuid4().hex}.{ext}"
+        fpath = tts_dir / fname
+        with open(fpath, "wb") as f:
+            f.write(data_bytes)
+        host = settings.host if settings.host not in ("0.0.0.0", "::", "") else "localhost"
+        base_http = f"http://{host}:{settings.port}"
+        url = f"{base_http}/static/tts/{fname}"
+        return TTSResponse(success=True, url=url, request_id=request_id, timestamp=timestamp)
+    except Exception as e:
+        return TTSResponse(success=False, error=str(e), request_id=request_id, timestamp=timestamp)

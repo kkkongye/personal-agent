@@ -318,6 +318,12 @@ def user_create_agent(req: RequestCreateAgent) -> Dict[str, Any]:
             except Exception:
                 allow_img = False
             bf.write(f"set INPUTS_INCLUDE_IMAGE={'true' if allow_img else 'false'}\n")
+            outputs = manifest.get("modules", {}).get("outputs", [])
+            try:
+                allow_speech = ("speech" in [str(x or "") for x in outputs])
+            except Exception:
+                allow_speech = False
+            bf.write(f"set OUTPUTS_INCLUDE_SPEECH={'true' if allow_speech else 'false'}\n")
             bf.write("start \"OctopusServer\" %PYEXE% -m octopus.octopus --port 9527\n")
             bf.write("timeout /t 2 >nul\n")
             bf.write("start \"\" http://localhost:9527/\n")

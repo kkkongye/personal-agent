@@ -13,6 +13,7 @@ class OctopusChat {
             characterCount: document.getElementById('characterCount'),
             statusIndicator: document.getElementById('statusIndicator')
         };
+        this.allowSpeech = false;
 
         this.isLoading = false;
         this.maxCharacters = 2000;
@@ -134,6 +135,7 @@ class OctopusChat {
             const r2 = await fetch('/v1/ui-config');
             const cfg = await r2.json();
             const allowImage = !!(cfg && cfg.allow_image_input);
+            this.allowSpeech = !!(cfg && cfg.allow_speech_output);
             if (!allowImage) {
                 if (this.elements.addImageButton) this.elements.addImageButton.style.display = 'none';
                 if (this.elements.imageInput) this.elements.imageInput.disabled = true;
@@ -274,6 +276,27 @@ class OctopusChat {
         // Format content (handle JSON responses, code blocks, etc.)
         const formattedContent = this.formatMessageContent(content);
         contentDiv.innerHTML = formattedContent;
+        if (sender === 'assistant' && this.allowSpeech) {
+            const playBtn = document.createElement('button');
+            playBtn.className = 'add-image-button';
+            playBtn.title = '朗读';
+            playBtn.textContent = '🔊';
+            playBtn.addEventListener('click', async () => {
+                try {
+                    const r = await fetch('/v1/tts', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text: content })
+                    });
+                    const j = await r.json();
+                    if (j && j.success && j.url) {
+                        const audio = new Audio(j.url);
+                        audio.play();
+                    }
+                } catch (_) {}
+            });
+            contentDiv.appendChild(playBtn);
+        }
 
         // Optional image attachment under text
         if (imageUrl) {

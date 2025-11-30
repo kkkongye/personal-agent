@@ -7,3 +7,7 @@ agent_provider/__pycache__/ap.cpython-312.pyc
 app/__pycache__/user_app.cpython-312.pyc
 agent_provider/octopus/web/uploads/*
 !agent_provider/octopus/web/uploads/.gitkeep
+agent_provider/octopus/web/tts/*
+!agent_provider/octopus/web/tts/.gitkeep
+local_store/ap_db/*
+local_store/tp_db/*
