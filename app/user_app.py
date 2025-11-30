@@ -281,7 +281,7 @@ def user_create_agent(req: RequestCreateAgent) -> Dict[str, Any]:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(manifest, f, ensure_ascii=False, indent=2)
         features = manifest.get("modules", {}).get("features", [])
-        mapping = {"text-processing": "text_processor", "news-search": "news"}
+        mapping = {"text-processing": "text_processor", "news-search": "news", "web-browsing": "web_browsing"}
         allowed_agents = [mapping.get(x, "") for x in features]
         allowed_agents = [x for x in allowed_agents if x]
         active_path = os.path.join(root, "active_agents.json")
@@ -528,7 +528,7 @@ def ui() -> Response:
       'text-processing':'文本处理',
       'news-search':'新闻查询',
       'payment':'支付',
-      'web-browsing':'浏览网页',
+      'web-browsing':'联网搜索',
       'rag-openai':'RAG+OPENAI',
       'rag-deepseek':'RAG+deepseek',
       'knowledge-pro':'专业知识库',

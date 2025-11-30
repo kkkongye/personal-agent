@@ -87,6 +87,16 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error(f"Failed to initialize News Agent: {str(e)}")
 
+        # Initialize Web Browsing Agent (optional)
+        try:
+            logger.info("Initializing Web Browsing Agent...")
+            from octopus.agents.web_browsing_agent import WebBrowsingAgent
+
+            _wb_agent = WebBrowsingAgent()
+            logger.info("Web Browsing Agent initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize Web Browsing Agent: {str(e)}")
+
         # Inject agents into chat router
         set_agents(master_agent, message_agent)
 

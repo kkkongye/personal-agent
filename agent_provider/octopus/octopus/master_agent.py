@@ -488,6 +488,39 @@ If no suitable agent is found, respond with:
                 "reasoning": "Heuristic: sentiment keywords detected",
             }
 
+        # Web browsing today/history
+        wb_kw = (
+            any(k in request for k in ["联网搜索", "搜索", "查询", "今天", "历史", "新闻", "日期", "百科", "发生了什么", "会议", "国际会议", "峰会", "论坛", "大会", "外交"]) or
+            ("web" in lower and "search" in lower) or
+            ("history" in lower and ("today" in lower or "date" in lower)) or
+            ("today" in lower and ("happen" in lower or "happened" in lower))
+        )
+        if wb_kw:
+            q = self._extract_trailing_text(request) or request
+            return {
+                "agent_name": "web_browsing",
+                "method_name": "ask",
+                "parameters": {"question": q},
+                "confidence": 0.75,
+                "reasoning": "Heuristic: web browsing keywords detected",
+            }
+
+        # Fallback: if only web_browsing is available, route to it
+        try:
+            from .router.rpc_services import get_allowed_agents
+            allowed = get_allowed_agents()
+            names = [a.get("name") for a in (allowed or [])]
+            if names == ["web_browsing"]:
+                return {
+                    "agent_name": "web_browsing",
+                    "method_name": "ask",
+                    "parameters": {"question": request},
+                    "confidence": 0.6,
+                    "reasoning": "Fallback: only web_browsing allowed",
+                }
+        except Exception:
+            pass
+
         # Keywords
         if ("关键词" in request) or ("keyword" in lower):
             text = self._extract_trailing_text(request) or request
