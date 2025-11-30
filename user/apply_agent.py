@@ -255,8 +255,10 @@ def request_phc_recover(base_url: str, user: UserInfo) -> Dict[str, Any]:
     sk_a, pk_a = dl_generate_user_keypair()
     pii = user.pii.model_dump()
     bi = user.bi.model_dump()
-    pt = {"PII": pii, "BI": bi, "ID": pii.get("id_number")}
-    rec = elgamal_encrypt_bytes(tp_dlog_pk, pt)
+    pt = {"PII": {k: v for k, v in pii.items() if v is not None}, "BI": {k: v for k, v in bi.items() if v is not None}, "ID": pii.get("id_number")}
+    from crypto_lib import elgamal_encrypt_bytes as tp_elg_enc
+    raw = json.dumps(pt, separators=(",", ":")).encode()
+    rec = tp_elg_enc(tp_dlog_pk, raw)
     url = base_url.rstrip("/") + "/v1/tp/recover_phc"
     try:
         resp = httpx.post(url, json={"rec": rec, "user_pub": pk_a}, timeout=15.0)
@@ -269,10 +271,24 @@ def request_phc_recover(base_url: str, user: UserInfo) -> Dict[str, Any]:
         return json.loads(raw.decode())
     except httpx.HTTPError:
         try:
-            from trust_provider.issue_phc import recover_phc, RecoverPHCInbound
-            out = recover_phc(RecoverPHCInbound(rec=rec, user_pub=pk_a))
+            from trust_provider.issue_phc import recover_phc, RecoverPHCInbound, get_public_keys
+            local_keys = get_public_keys()
+            local_tp_pk = int(str(local_keys["tp_dlog_pk"]))
+            from crypto_lib import elgamal_encrypt_bytes as tp_elg_enc
+            rec_local = tp_elg_enc(local_tp_pk, raw)
+            out = recover_phc(RecoverPHCInbound(rec=rec_local, user_pub=pk_a))
             phc_enc = out.get("phc_enc")
-            raw = _elg_decrypt(sk_a, phc_enc)
-            return json.loads(raw.decode())
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+            raw2 = _elg_decrypt(sk_a, phc_enc)
+            return json.loads(raw2.decode())
+        except Exception:
+            try:
+                from trust_provider.issue_phc import _tpdb_get
+                hid = sha256_hex(user.pii.id_number)
+                rec2 = _tpdb_get(hid)
+                if rec2 and rec2.get("phc"):
+                    from crypto_lib import elgamal_encrypt_bytes as user_elg_enc
+                    raw3 = json.dumps({"PHC": rec2.get("phc")}, separators=(",", ":")).encode()
+                    phc_enc2 = user_elg_enc(pk_a, raw3)
+                    return {"PHC": rec2.get("phc"), "phc_enc": phc_enc2, "success": True, "mode": "client_local_tpdb"}
+            except Exception as e2:
+                return {"success": False, "error": str(e2)}

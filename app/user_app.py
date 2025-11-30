@@ -9,13 +9,16 @@ from trust_provider.crypto import elgamal_decrypt_bytes
 from user.crypto import canonical_json, sha256_hex
 from crypto_lib import compute_af_formal, hcgen_cmi, ch_compute, cch_compute
 from trust_provider.issue_phc import TP_DL_PK
+from trust_provider.issue_phc import reveal_identity, RevealByDidRequest
 from agent_provider.ap import AP_PK
+from pic.pic_upload import router as pic_router
 import httpx
 from user.crypto import compute_r_bind, canonical_json, sha256_hex, compute_cmi, dl_generate_user_keypair
 from user.crypto import elgamal_encrypt_bytes
 from trust_provider.issue_phc import issue_phc, ASOCompleteModel
 
 app = FastAPI(title="User Service")
+app.include_router(pic_router, prefix="/v1")
 
 class RequestPHC(BaseModel):
     base_url: str
@@ -97,7 +100,7 @@ def user_recover_phc(req: RequestPHC) -> Dict[str, Any]:
     except Exception:
         ok = False
     hid = sha256_hex(req.user.pii.id_number)
-    return {'success': True, 'phc': phc, 'verified_tp': ok, 'identity': {'hid': hid, 'pii': req.user.pii.model_dump(), 'bi': req.user.bi.model_dump()}}
+    return {'success': True, 'phc': phc, 'verified_tp': ok, 'identity': {'hid': hid, 'pii': req.user.pii.model_dump(exclude_none=True), 'bi': req.user.bi.model_dump(exclude_none=True)}}
 
 @app.post('/user/recover_both')
 def user_recover_both(req: RecoverBothRequest) -> Dict[str, Any]:
@@ -107,9 +110,17 @@ def user_recover_both(req: RecoverBothRequest) -> Dict[str, Any]:
         phc_obj = request_phc_recover(req.tp_base, req.user)
         phc = phc_obj.get('PHC') or phc_obj.get('phc') or {}
         if not phc:
-            return {"success": False, "error": "phc_recover_failed", "detail": phc_obj, "identity": {"hid": hid, "pii": req.user.pii.model_dump(), "bi": req.user.bi.model_dump()}}
+            return {"success": False, "error": "phc_recover_failed", "detail": phc_obj, "identity": {"hid": hid, "pii": req.user.pii.model_dump(exclude_none=True), "bi": req.user.bi.model_dump(exclude_none=True)}}
         pa_obj = request_pa_recover(req.ap_base, phc, req.user)
-        return {"success": True, "phc": phc, "pa": pa_obj, "identity": {"hid": hid, "pii": req.user.pii.model_dump(), "bi": req.user.bi.model_dump()}}
+        did = phc.get("DID") or ((phc.get("ASO") or {}).get("TPM") or {}).get("CDID")
+        try:
+            sec = reveal_identity(RevealByDidRequest(did=str(did)))
+            pii_out = (sec.get("pii") or {})
+            bi_out = (sec.get("bi") or {})
+        except Exception:
+            pii_out = req.user.pii.model_dump(exclude_none=True)
+            bi_out = req.user.bi.model_dump(exclude_none=True)
+        return {"success": True, "phc": phc, "pa": pa_obj, "identity": {"hid": hid, "pii": pii_out, "bi": bi_out}}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -459,7 +470,7 @@ def ui() -> Response:
       <label>ID</label><input id=idnum value="ID123">
       <label>ID Card</label><input id=idcard value="IDCARD123456">
       <label>Email</label><input id=email value="alice@example.com">
-      <label>Passport</label><input id=passport value="P123456789">
+      <label>Passport</label><input id=passport value="P123456789"><label>Photo</label><input id=picfile type=file accept="image/*">
     </div>
     <button id=issue>1.请求 PHC</button>
     <pre id=phc></pre>
@@ -546,7 +557,17 @@ def ui() -> Response:
         
         document.getElementById('issue').onclick = async ()=>{
         const tpBase = tpEl && tpEl.value ? tpEl.value : 'http://127.0.0.1:8001';
-        const user={pii:{name:name.value,id_number:idnum.value,id_card_number:(idcard?idcard.value:''),email:email.value},bi:{last_login_ip:'127.0.0.1',passport_number:(passport?passport.value:'')},cdid:'cdid:user.placeholder',ecid:'g'};
+        const f = document.getElementById('picfile')?.files?.[0];
+        if (!f) { phcPre.textContent='请先选择照片再申请 PHC'; return; }
+        const fd=new FormData(); fd.append('file', f);
+        let picString=null;
+        try {
+          const rUpload=await fetch('/v1/pic/upload',{method:'POST',body:fd});
+          const dUpload=await rUpload.json();
+          picString = dUpload.string_part || null;
+          if (!picString) { phcPre.textContent='图片上传失败，请重试'; return; }
+        } catch (e) { phcPre.textContent='图片上传失败：'+(e&&e.message?e.message:'unknown'); return; }
+        const user={pii:{name:name.value,id_number:idnum.value,id_card_number:(idcard?idcard.value:''),email:email.value},bi:{last_login_ip:'127.0.0.1',passport_number:(passport?passport.value:''),pic_string:picString},cdid:'cdid:user.placeholder',ecid:'g'};
         const payload={base_url:tpBase,user};
         try{
             const r=await fetch('/user/request_phc',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
@@ -609,7 +630,7 @@ def ui() -> Response:
         const tpBase = 'http://127.0.0.1:8001';
         const apBase = 'http://127.0.0.1:8002';
         const user={pii:{name:name.value,id_number:idnum.value,id_card_number:(idcard?idcard.value:''),email:email.value},bi:{last_login_ip:'127.0.0.1',passport_number:(passport?passport.value:'')},cdid:'cdid:user.placeholder',ecid:'g'};
-        try{
+        try {
             const r=await fetch('/user/recover_both',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({tp_base:tpBase, ap_base:apBase, user})});
             const data=await r.json(); paRecover.textContent=JSON.stringify(data,null,2);
             window.__PHC = data.phc || null;
