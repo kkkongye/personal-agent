@@ -292,7 +292,7 @@ def user_create_agent(req: RequestCreateAgent) -> Dict[str, Any]:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(manifest, f, ensure_ascii=False, indent=2)
         features = manifest.get("modules", {}).get("features", [])
-        mapping = {"text-processing": "text_processor", "news-search": "news"}
+        mapping = {"text-processing": "text_processor", "news-search": "news", "web-browsing": "web_browsing"}
         allowed_agents = [mapping.get(x, "") for x in features]
         allowed_agents = [x for x in allowed_agents if x]
         active_path = os.path.join(root, "active_agents.json")
@@ -307,6 +307,34 @@ def user_create_agent(req: RequestCreateAgent) -> Dict[str, Any]:
             bf.write("set PYEXE=python\n")
             bf.write("if exist .venv\\Scripts\\python.exe set PYEXE=.venv\\Scripts\\python.exe\n")
             bf.write("cd /d agent_provider\\octopus\n")
+            reason = manifest.get("modules", {}).get("reasoning", [])
+            labels = [str(m or "") for m in reason]
+            prov = "openai"
+            try:
+                lab_set = set(labels)
+                if ("rag-openai" in lab_set) and ("rag-deepseek" in lab_set):
+                    prov = "openai"
+                elif ("rag-openai" in lab_set):
+                    prov = "openai"
+                elif ("rag-deepseek" in lab_set):
+                    prov = "deepseek"
+                else:
+                    prov = "openai"
+            except Exception:
+                prov = "openai"
+            bf.write(f"set MODEL_PROVIDER={prov}\n")
+            inputs = manifest.get("modules", {}).get("inputs", [])
+            try:
+                allow_img = ("image" in [str(x or "") for x in inputs])
+            except Exception:
+                allow_img = False
+            bf.write(f"set INPUTS_INCLUDE_IMAGE={'true' if allow_img else 'false'}\n")
+            outputs = manifest.get("modules", {}).get("outputs", [])
+            try:
+                allow_speech = ("speech" in [str(x or "") for x in outputs])
+            except Exception:
+                allow_speech = False
+            bf.write(f"set OUTPUTS_INCLUDE_SPEECH={'true' if allow_speech else 'false'}\n")
             bf.write("start \"OctopusServer\" %PYEXE% -m octopus.octopus --port 9527\n")
             bf.write("timeout /t 2 >nul\n")
             bf.write("start \"\" http://localhost:9527/\n")
@@ -513,7 +541,16 @@ def ui() -> Response:
       'json-api':'JSON API',
       'actuation':'执行'
     };
-    const zhLabelMapExtra={ 'text-processing':'文本处理', 'news-search':'新闻查询' };
+    const zhLabelMapExtra={
+      'text-processing':'文本处理',
+      'news-search':'新闻查询',
+      'payment':'支付',
+      'web-browsing':'联网搜索',
+      'rag-openai':'RAG+OPENAI',
+      'rag-deepseek':'RAG+deepseek',
+      'knowledge-pro':'专业知识库',
+      'ppt':'ppt'
+    };
         let phcObj=null;
         let cmmObj=null;
         let cmcObj=null;

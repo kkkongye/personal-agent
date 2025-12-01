@@ -294,6 +294,8 @@ def _build_cmm_matrix(hid: str, phc: Dict[str, Any]) -> List[List[Dict[str, Any]
         [
             {"id": "feature_text_processing", "label": "text-processing", "params": {}},
             {"id": "feature_news_search", "label": "news-search", "params": {}},
+            {"id": "feature_payment", "label": "payment", "params": {}},
+            {"id": "feature_web_browsing", "label": "web-browsing", "params": {}},
         ],
         [
             {"id": "input_text", "label": "text", "params": {}},
@@ -301,19 +303,20 @@ def _build_cmm_matrix(hid: str, phc: Dict[str, Any]) -> List[List[Dict[str, Any]
             {"id": "input_image", "label": "image", "params": {}},
         ],
         [
-            {"id": "reason_llm", "label": "llm", "params": {}},
-            {"id": "reason_retrieval", "label": "retrieval", "params": {}},
-            {"id": "reason_neural_network", "label": "neural-network", "params": {}},
+            {"id": "reason_rag_openai", "label": "rag-openai", "params": {}},
+            {"id": "reason_rag_deepseek", "label": "rag-deepseek", "params": {}},
         ],
         [
             {"id": "knowledge_local_memory", "label": "local-memory", "params": {}},
             {"id": "knowledge_long_term_memory", "label": "long-term-memory", "params": {}},
-            {"id": "knowledge_base", "label": "knowledge-base", "params": {}},
+            {"id": "knowledge_pro", "label": "knowledge-pro", "params": {}},
         ],
         [
             {"id": "output_text", "label": "text", "params": {}},
             {"id": "output_speech", "label": "speech", "params": {}},
             {"id": "output_image", "label": "image", "params": {}},
+            {"id": "output_video", "label": "video", "params": {}},
+            {"id": "output_ppt", "label": "ppt", "params": {}},
         ],
     ]
 

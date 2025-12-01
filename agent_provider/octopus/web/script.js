@@ -5,10 +5,15 @@ class OctopusChat {
         this.elements = {
             chatMessages: document.getElementById('chatMessages'),
             messageInput: document.getElementById('messageInput'),
+            imageInput: document.getElementById('imageInput'),
+            addImageButton: document.getElementById('addImageButton'),
+            imageFileName: document.getElementById('imageFileName'),
+            imagePreview: document.getElementById('imagePreview'),
             sendButton: document.getElementById('sendButton'),
             characterCount: document.getElementById('characterCount'),
             statusIndicator: document.getElementById('statusIndicator')
         };
+        this.allowSpeech = false;
 
         this.isLoading = false;
         this.maxCharacters = 2000;
@@ -52,6 +57,36 @@ class OctopusChat {
                 this.autoResizeTextarea();
             }, 10);
         });
+
+        if (this.elements.addImageButton) {
+            this.elements.addImageButton.addEventListener('click', () => {
+                if (!this.elements.imageInput) return;
+                try {
+                    if (typeof this.elements.imageInput.showPicker === 'function') {
+                        this.elements.imageInput.showPicker();
+                    } else {
+                        this.elements.imageInput.click();
+                    }
+                } catch (_) {
+                    this.elements.imageInput.click();
+                }
+            });
+        }
+
+        if (this.elements.imageInput) {
+            this.elements.imageInput.addEventListener('change', () => {
+                const file = this.elements.imageInput.files && this.elements.imageInput.files[0] ? this.elements.imageInput.files[0] : null;
+                if (file) {
+                    if (this.elements.imageFileName) this.elements.imageFileName.textContent = `选择图片：${file.name}`;
+                    this.renderImagePreview(file);
+                    this.showNotification('图片已选择', 'success');
+                } else {
+                    if (this.elements.imageFileName) this.elements.imageFileName.textContent = '';
+                    this.clearImagePreview();
+                }
+                this.updateCharacterCount();
+            });
+        }
     }
 
     autoResizeTextarea() {
@@ -64,8 +99,8 @@ class OctopusChat {
         const currentLength = this.elements.messageInput.value.length;
         this.elements.characterCount.textContent = `${currentLength}/${this.maxCharacters}`;
 
-        // Update button state
-        const isEmpty = currentLength === 0;
+        const hasImage = this.elements.imageInput && this.elements.imageInput.files && this.elements.imageInput.files.length > 0;
+        const isEmpty = (currentLength === 0) && !hasImage;
         const tooLong = currentLength > this.maxCharacters;
 
         this.elements.sendButton.disabled = isEmpty || tooLong || this.isLoading;
@@ -94,6 +129,20 @@ class OctopusChat {
             console.error('Status check failed:', error);
             this.updateStatus('Disconnected', 'error');
         }
+
+        // Gate image upload by backend UI config
+        try {
+            const r2 = await fetch('/v1/ui-config');
+            const cfg = await r2.json();
+            const allowImage = !!(cfg && cfg.allow_image_input);
+            this.allowSpeech = !!(cfg && cfg.allow_speech_output);
+            if (!allowImage) {
+                if (this.elements.addImageButton) this.elements.addImageButton.style.display = 'none';
+                if (this.elements.imageInput) this.elements.imageInput.disabled = true;
+                if (this.elements.imagePreview) this.elements.imagePreview.style.display = 'none';
+                if (this.elements.imageFileName) this.elements.imageFileName.textContent = '';
+            }
+        } catch (e) {}
     }
 
     updateStatus(text, type) {
@@ -123,13 +172,14 @@ class OctopusChat {
 
     async sendMessage() {
         const messageText = this.elements.messageInput.value.trim();
+        const imageFile = this.elements.imageInput && this.elements.imageInput.files && this.elements.imageInput.files[0] ? this.elements.imageInput.files[0] : null;
 
-        if (!messageText || this.isLoading) {
+        if ((!messageText && !imageFile) || this.isLoading) {
             return;
         }
 
-        // Add user message to chat
-        this.addMessage(messageText, 'user');
+        // Add user message to chat (attach selected image if any)
+        this.addMessage(messageText, 'user', 'normal', imageFile ? (this.currentImagePreviewUrl || URL.createObjectURL(imageFile)) : null);
 
         // Clear input
         this.elements.messageInput.value = '';
@@ -141,17 +191,19 @@ class OctopusChat {
         this.setLoading(true);
 
         try {
-            // Send request to backend
-            const response = await fetch('/v1/chat', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    message: messageText,
-                    timestamp: new Date().toISOString()
-                })
-            });
+            let response;
+            if (imageFile) {
+                const fd = new FormData();
+                fd.append('prompt', messageText || '');
+                fd.append('image', imageFile);
+                response = await fetch('/v1/vision', { method: 'POST', body: fd });
+            } else {
+                response = await fetch('/v1/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: messageText, timestamp: new Date().toISOString() })
+                });
+            }
 
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
@@ -163,9 +215,21 @@ class OctopusChat {
             this.removeProcessingMessage(processingMessageId);
 
             if (data.success) {
-                // Add assistant response
-                this.addMessage(data.response, 'assistant');
+                let respText = data.response;
+                try {
+                    const obj = JSON.parse(data.response);
+                    if (obj && (obj.ocr_text || obj.answer)) {
+                        const ocr = obj.ocr_text ? String(obj.ocr_text).trim() : '';
+                        const ans = obj.answer ? String(obj.answer).trim() : '';
+                        respText = (ocr ? `识别文字：\n${ocr}\n\n` : '') + (ans ? `答案：\n${ans}` : '');
+                    }
+                } catch (_) {}
+                this.addMessage(respText, 'assistant', 'normal', imageFile ? (this.currentImagePreviewUrl || null) : null);
                 this.updateStatus('Ready', 'success');
+                if (this.elements.imageInput) this.elements.imageInput.value = '';
+                this.clearImagePreview();
+                if (this.elements.imageFileName) this.elements.imageFileName.textContent = '';
+                this.updateCharacterCount();
             } else {
                 // Handle error response
                 this.addMessage(
@@ -193,7 +257,7 @@ class OctopusChat {
         }
     }
 
-    addMessage(content, sender, type = 'normal') {
+    addMessage(content, sender, type = 'normal', imageUrl = null) {
         const messageDiv = document.createElement('div');
         messageDiv.className = `message ${sender}-message`;
 
@@ -212,6 +276,36 @@ class OctopusChat {
         // Format content (handle JSON responses, code blocks, etc.)
         const formattedContent = this.formatMessageContent(content);
         contentDiv.innerHTML = formattedContent;
+        if (sender === 'assistant' && this.allowSpeech) {
+            const playBtn = document.createElement('button');
+            playBtn.className = 'add-image-button';
+            playBtn.title = '朗读';
+            playBtn.textContent = '🔊';
+            playBtn.addEventListener('click', async () => {
+                try {
+                    const r = await fetch('/v1/tts', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text: content })
+                    });
+                    const j = await r.json();
+                    if (j && j.success && j.url) {
+                        const audio = new Audio(j.url);
+                        audio.play();
+                    }
+                } catch (_) {}
+            });
+            contentDiv.appendChild(playBtn);
+        }
+
+        // Optional image attachment under text
+        if (imageUrl) {
+            const img = document.createElement('img');
+            img.src = imageUrl;
+            img.alt = '附件图片';
+            img.className = 'message-image';
+            contentDiv.appendChild(img);
+        }
 
         messageDiv.appendChild(avatarDiv);
         messageDiv.appendChild(contentDiv);
@@ -301,6 +395,33 @@ class OctopusChat {
 
     scrollToBottom() {
         this.elements.chatMessages.scrollTop = this.elements.chatMessages.scrollHeight;
+    }
+
+    renderImagePreview(file) {
+        const preview = this.elements.imagePreview;
+        if (!preview || !file) return;
+        const url = URL.createObjectURL(file);
+        this.currentImagePreviewUrl = url;
+        const img = document.createElement('img');
+        img.src = url;
+        const name = document.createElement('span');
+        name.className = 'name';
+        name.textContent = file.name || 'image';
+        preview.innerHTML = '';
+        preview.appendChild(img);
+        preview.appendChild(name);
+        preview.style.display = 'flex';
+    }
+
+    clearImagePreview() {
+        const preview = this.elements.imagePreview;
+        if (!preview) return;
+        preview.innerHTML = '';
+        preview.style.display = 'none';
+        if (this.currentImagePreviewUrl) {
+            try { URL.revokeObjectURL(this.currentImagePreviewUrl); } catch (_) {}
+            this.currentImagePreviewUrl = null;
+        }
     }
 
     // Utility method to show notifications

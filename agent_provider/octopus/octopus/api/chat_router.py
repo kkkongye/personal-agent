@@ -8,7 +8,7 @@ import json
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 
 from octopus.agents.message.message_agent import MessageAgent
@@ -31,6 +31,25 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     success: bool
     response: str | None = None
+    error: str | None = None
+    request_id: str
+    timestamp: str
+
+class VisionResponse(BaseModel):
+    success: bool
+    response: str | None = None
+    error: str | None = None
+    request_id: str
+    timestamp: str
+
+class TTSRequest(BaseModel):
+    text: str
+    voice: str | None = None
+    format: str | None = None
+
+class TTSResponse(BaseModel):
+    success: bool
+    url: str | None = None
     error: str | None = None
     request_id: str
     timestamp: str
@@ -107,3 +126,124 @@ async def chat(request: ChatRequest):
         return ChatResponse(
             success=False, error=str(e), request_id=request_id, timestamp=timestamp
         )
+
+
+@router.post("/vision", response_model=VisionResponse)
+async def vision(prompt: str = Form(""), image: UploadFile = File(...)):
+    """Image understanding via OpenAI-compatible /v1/chat/completions."""
+    request_id = str(uuid.uuid4())
+    timestamp = datetime.now().isoformat()
+    try:
+        from pathlib import Path
+        import httpx
+        from octopus.config.settings import get_settings
+        settings = get_settings()
+
+        # Save to static uploads directory
+        web_dir = Path(__file__).resolve().parents[2] / "web"
+        uploads_dir = web_dir / "uploads"
+        uploads_dir.mkdir(parents=True, exist_ok=True)
+        fname = f"{uuid.uuid4().hex}"
+        # try to keep extension
+        name = image.filename or "image"
+        if "." in name:
+            ext = name.split(".")[-1].lower()
+            fname = f"{fname}.{ext}"
+        fpath = uploads_dir / fname
+        content = await image.read()
+        with open(fpath, "wb") as f:
+            f.write(content)
+
+        # Build public URL served by FastAPI static mount
+        host = settings.host if settings.host not in ("0.0.0.0", "::", "") else "localhost"
+        base_http = f"http://{host}:{settings.port}"
+        img_url = f"{base_http}/static/uploads/{fname}"
+
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {settings.openai_api_key}",
+            "Content-Type": "application/json",
+        }
+        # Prefer data URI to avoid remote image fetch issues at the provider side
+        import base64
+        b64 = base64.b64encode(content).decode("utf-8")
+        # Determine mime type from extension
+        ext_lower = fname.split(".")[-1].lower() if "." in fname else ""
+        mime = (
+            "image/png" if ext_lower == "png" else
+            "image/jpeg" if ext_lower in ("jpg", "jpeg") else
+            "image/gif" if ext_lower == "gif" else
+            "image/webp" if ext_lower == "webp" else
+            "image/bmp" if ext_lower == "bmp" else
+            "image/png"
+        )
+        data_uri = f"data:{mime};base64,{b64}"
+        payload = {
+            "model": settings.openai_model or "gpt-4o",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": (prompt or "请先识别图片中的文字，再给出你的答案。")},
+                        {"type": "image_url", "image_url": {"url": data_uri}},
+                    ],
+                }
+            ],
+            "temperature": (settings.openai_temperature if settings.openai_temperature is not None else 0.2),
+            "max_tokens": (settings.openai_max_tokens if settings.openai_max_tokens is not None else 1000),
+        }
+
+        base_url = settings.openai_base_url or "https://api.openai.com/v1"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(base_url + "/chat/completions", json=payload, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+        try:
+            text = data["choices"][0]["message"]["content"]
+        except Exception:
+            text = json.dumps(data, ensure_ascii=False)
+        return VisionResponse(success=True, response=text, request_id=request_id, timestamp=timestamp)
+    except Exception as e:
+        return VisionResponse(success=False, error=str(e), request_id=request_id, timestamp=timestamp)
+
+
+@router.post("/tts", response_model=TTSResponse)
+async def tts(req: TTSRequest):
+    request_id = str(uuid.uuid4())
+    timestamp = datetime.now().isoformat()
+    try:
+        import httpx
+        from pathlib import Path
+        from octopus.config.settings import get_settings
+        settings = get_settings()
+        base_url = settings.openai_base_url or "https://api.openai.com/v1"
+        tts_url = base_url.rstrip("/") + ("/audio/speech" if base_url.endswith("/v1") else "/v1/audio/speech")
+        headers = {
+            "Authorization": f"Bearer {settings.openai_api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": settings.tts_model or "tts-1",
+            "input": req.text,
+            "voice": req.voice or settings.tts_voice or "alloy",
+            "response_format": req.format or settings.tts_format or "wav",
+        }
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(tts_url, json=payload, headers=headers)
+            resp.raise_for_status()
+            ctype = resp.headers.get("Content-Type", "")
+            data_bytes = resp.content
+        web_dir = Path(__file__).resolve().parents[2] / "web"
+        tts_dir = web_dir / "tts"
+        tts_dir.mkdir(parents=True, exist_ok=True)
+        ext = (payload["response_format"] or "wav").lower()
+        fname = f"{uuid.uuid4().hex}.{ext}"
+        fpath = tts_dir / fname
+        with open(fpath, "wb") as f:
+            f.write(data_bytes)
+        host = settings.host if settings.host not in ("0.0.0.0", "::", "") else "localhost"
+        base_http = f"http://{host}:{settings.port}"
+        url = f"{base_http}/static/tts/{fname}"
+        return TTSResponse(success=True, url=url, request_id=request_id, timestamp=timestamp)
+    except Exception as e:
+        return TTSResponse(success=False, error=str(e), request_id=request_id, timestamp=timestamp)

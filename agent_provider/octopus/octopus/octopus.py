@@ -87,6 +87,16 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error(f"Failed to initialize News Agent: {str(e)}")
 
+        # Initialize Web Browsing Agent (optional)
+        try:
+            logger.info("Initializing Web Browsing Agent...")
+            from octopus.agents.web_browsing_agent import WebBrowsingAgent
+
+            _wb_agent = WebBrowsingAgent()
+            logger.info("Web Browsing Agent initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize Web Browsing Agent: {str(e)}")
+
         # Inject agents into chat router
         set_agents(master_agent, message_agent)
 
@@ -294,6 +304,20 @@ async def get_info():
         "version": settings.app_version,
         "description": "A FastAPI application for the Octopus project",
     }
+
+
+@app.get("/v1/ui-config")
+async def get_ui_config():
+    import os
+    val = str(os.environ.get("INPUTS_INCLUDE_IMAGE", "")).lower().strip()
+    if val in ("0", "false", "no"):
+        allow_image = False
+    else:
+        # 默认允许，只有明确关闭时才隐藏
+        allow_image = True
+    sval = str(os.environ.get("OUTPUTS_INCLUDE_SPEECH", "")).lower().strip()
+    allow_speech = sval in ("1", "true", "yes")
+    return {"allow_image_input": allow_image, "allow_speech_output": allow_speech}
 
 
 @app.get("/anp/status")
