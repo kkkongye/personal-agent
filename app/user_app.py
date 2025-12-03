@@ -13,6 +13,7 @@ from trust_provider.issue_phc import reveal_identity, RevealByDidRequest
 from agent_provider.ap import AP_PK
 from pic.pic_upload import router as pic_router
 import httpx
+import os
 from user.crypto import compute_r_bind, canonical_json, sha256_hex, compute_cmi, dl_generate_user_keypair
 from user.crypto import elgamal_encrypt_bytes
 from trust_provider.issue_phc import issue_phc, ASOCompleteModel
@@ -77,13 +78,25 @@ def user_request_phc(req: RequestPHC) -> Dict[str, Any]:
     try:
         res = request_phc_secure(req.base_url, req.user)
         return res.model_dump()
-    except httpx.HTTPError:
-        r_bind = compute_r_bind()
-        af = sha256_hex(canonical_json({"pii": req.user.pii.model_dump(), "bi": req.user.bi.model_dump(), "r_bind": r_bind, "pk_ap": "ap.pk.placeholder"}))
-        cmi = compute_cmi(req.user.pii.model_dump())
-        payload = ASOCompleteModel(af=af, cmi=cmi, cdid=req.user.cdid, ecid=req.user.ecid)
-        data = issue_phc(payload)
-        return data
+    except httpx.HTTPError as e:
+        from fastapi import HTTPException
+        status = getattr(getattr(e, "response", None), "status_code", 502)
+        detail = None
+        if getattr(e, "response", None) is not None:
+            try:
+                detail = e.response.json().get("detail")
+            except Exception:
+                pass
+        if status == 403 and str(detail) in {"face_verification_failed", "face_record_not_found"}:
+            raise HTTPException(status_code=403, detail=str(detail) or "face_verification_failed")
+        if (os.getenv("ALLOW_LEGACY_ISSUE") or "0") == "1":
+            r_bind = compute_r_bind()
+            af = sha256_hex(canonical_json({"pii": req.user.pii.model_dump(), "bi": req.user.bi.model_dump(), "r_bind": r_bind, "pk_ap": "ap.pk.placeholder"}))
+            cmi = compute_cmi(req.user.pii.model_dump())
+            payload = ASOCompleteModel(af=af, cmi=cmi, cdid=req.user.cdid, ecid=req.user.ecid)
+            data = issue_phc(payload)
+            return data
+        raise HTTPException(status_code=status, detail=detail or "phc_secure_failed")
 
 @app.post('/user/recover_phc')
 def user_recover_phc(req: RequestPHC) -> Dict[str, Any]:
