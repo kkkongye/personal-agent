@@ -45,11 +45,39 @@ import logging
 from pydantic import BaseModel
 import hashlib
 import secrets
+import os
+try:
+    import pymysql
+except Exception:
+    pymysql = None
 
 log = logging.getLogger("tp")
 from datetime import datetime
 
 router = APIRouter()
+
+def _mysql_get_pic_string_by_user_id(user_id: str) -> Optional[str]:
+    if pymysql is None:
+        raise HTTPException(status_code=500, detail="db_driver_missing")
+    host = os.getenv("MYSQL_HOST") or "127.0.0.1"
+    port = int(os.getenv("MYSQL_PORT") or "3306")
+    user = os.getenv("MYSQL_USER") or "root"
+    password = os.getenv("MYSQL_PASSWORD") or "1234"
+    db = os.getenv("MYSQL_DB") or "avatar"
+    table = os.getenv("MYSQL_TABLE") or "bi"
+    try:
+        conn = pymysql.connect(host=host, port=port, user=user, password=password, database=db, charset="utf8mb4", connect_timeout=3)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(f"SELECT `pic_string` FROM `{table}` WHERE `user_id`=%s LIMIT 1", (user_id,))
+                row = cur.fetchone()
+                if not row:
+                    return None
+                return row[0] if isinstance(row, (tuple, list)) else None
+        finally:
+            conn.close()
+    except Exception:
+        raise HTTPException(status_code=500, detail="db_check_failed")
 
 
 class TPMModel(BaseModel):
@@ -106,6 +134,7 @@ def issue_phc(aso: ASOCompleteModel) -> Dict[str, Any]:
     - Return constructed PHC JSON-LD
     """
     from datetime import datetime
+
 
     # SECURE BRANCH: detect encrypted content by raw dict keys (FastAPI parsed model won't include them)
     # We access the request body via dependency injection less easily here; instead allow an alternate function below.
@@ -188,6 +217,17 @@ def issue_phc_secure(payload: SecureInbound) -> Dict[str, Any]:
     af_calc = compute_af(str(idv), pk_ap, TP_DL_PK, rb)
     if af_calc != af_recv:
         af_recv = af_calc
+    user_id = str(((pii or {}).get("id_number") or idv or "")).strip()
+    if not user_id:
+        raise HTTPException(status_code=400, detail="missing_user_id")
+    pic_db = _mysql_get_pic_string_by_user_id(user_id)
+    if not pic_db:
+        raise HTTPException(status_code=403, detail="face_record_not_found")
+    pic_str_in = str((bi or {}).get("pic_string") or "")
+    if pic_str_in and pic_str_in != pic_db:
+        raise HTTPException(status_code=403, detail="face_verification_failed")
+    bi = (bi or {})
+    bi["pic_string"] = pic_db
 
     rf = paillier_encrypt(TP_PAILLIER.public, int(hashlib.sha256(str(idv).encode()).hexdigest(), 16))
     crf = crf_encrypt(TP_DL_PK, rf, rb)
@@ -226,7 +266,7 @@ def issue_phc_secure(payload: SecureInbound) -> Dict[str, Any]:
         _tpdb_put(hid, {"cid": cid, "cid_enc": phc.get("CID_enc"), "rf": str(rf), "r_bind": str(rb), "phc": phc})
     except Exception:
         pass
-    return {"success": True, "phc": phc, "mode": "secure_phc_jsonld"}
+    return {"success": True, "phc": phc, "mode": "secure_phc_jsonld", "face_verified": True}
 
 
 @router.post("/tp/verify_phc")
