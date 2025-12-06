@@ -282,7 +282,47 @@ def user_cmm_submit(req: RequestCMMSubmit) -> Dict[str, Any]:
             raise ValueError("empty keys")
     except Exception:
         user_sk_int, user_pk_int = dl_generate_user_keypair()
-    out = request_cmm_submit(req.base_url, req.cmc, req.hid, req.phc, user_pk_int)
+    # Build personalized code snapshot to compute CMI from code hash chain
+    try:
+        import os, shutil, time
+        phc = req.phc or {}
+        phc_id = (phc.get("id") or "phc").replace(":", "_")
+        root = os.path.join(os.getcwd(), "local_store", "agents", phc_id)
+        os.makedirs(root, exist_ok=True)
+        # normalize HID for binding
+        try:
+            hid_str0 = str(req.hid or "")
+            is_hex0 = (len(hid_str0) == 64 and all(c in "0123456789abcdefABCDEF" for c in hid_str0))
+            hid_use0 = hid_str0 if is_hex0 else sha256_hex(hid_str0)
+        except Exception:
+            hid_use0 = sha256_hex(str(req.hid))
+        # derive allowed agents from CMC features
+        features = [m.get("label") for m in (req.cmc[0] if len(req.cmc)>0 else [])]
+        mapping = {"text-processing": "text_processor", "news-search": "news", "web-browsing": "web_browsing"}
+        allowed_agents = [mapping.get(x, "") for x in features]
+        allowed_agents = [x for x in allowed_agents if x]
+        personal_dir = os.path.join(root, "octopus_build")
+        src_dir = os.path.join(os.getcwd(), "agent_provider", "octopus")
+        if os.path.exists(personal_dir):
+            shutil.rmtree(personal_dir, ignore_errors=True)
+        shutil.copytree(src_dir, personal_dir, dirs_exist_ok=False)
+        prune_map = {
+            "text_processor": os.path.join(personal_dir, "octopus", "agents", "text_processor_agent.py"),
+            "news": os.path.join(personal_dir, "octopus", "agents", "news_agent.py"),
+            "web_browsing": os.path.join(personal_dir, "octopus", "agents", "web_browsing_agent.py"),
+        }
+        keep = set(allowed_agents)
+        for name, fpath in prune_map.items():
+            if name not in keep and os.path.exists(fpath):
+                try:
+                    os.remove(fpath)
+                except Exception:
+                    pass
+        from crypto_lib import dir_code_cmi_hid
+        cmi_code_int = dir_code_cmi_hid(personal_dir, hid_use0)
+    except Exception:
+        cmi_code_int = None
+    out = request_cmm_submit(req.base_url, req.cmc, req.hid, req.phc, user_pk_int, cmi_code=cmi_code_int)
     par = out.get("par")
     if not par:
         return out
@@ -296,7 +336,11 @@ def user_cmm_submit(req: RequestCMMSubmit) -> Dict[str, Any]:
         hid_use = hid_str if is_hex else sha256_hex(hid_str)
     except Exception:
         hid_use = sha256_hex(str(req.hid))
-    calc_cmi_int = hcgen_cmi(req.cmc, hid_use)
+    try:
+        from crypto_lib import dir_code_cmi_hid
+        calc_cmi_int = dir_code_cmi_hid(os.path.join(os.getcwd(), "local_store", "agents", (req.phc.get("id") or "phc").replace(":", "_"), "octopus_build"), hid_use)
+    except Exception:
+        calc_cmi_int = hcgen_cmi(req.cmc, hid_use)
     pa_cmi = ((obj.get("PA") or {}).get("APM") or {}).get("CMI")
     verified_cmi = (str(calc_cmi_int) == str(pa_cmi))
     # Verify AF formal: AF ?= H(ID) · pk_ap^CMI' · pk_tp^CRF · g^r_bind''
@@ -423,47 +467,28 @@ def user_create_agent(req: RequestCreateAgent) -> Dict[str, Any]:
         active_path = os.path.join(root, "active_agents.json")
         with open(active_path, "w", encoding="utf-8") as f2:
             json.dump({"allowed_agents": allowed_agents}, f2, ensure_ascii=False, indent=2)
-        bat_path = os.path.join(root, "launch_octopus.bat")
-        with open(bat_path, "w", encoding="utf-8") as bf:
-            bf.write("@echo off\n")
-            bf.write("setlocal enabledelayedexpansion\n")
-            bf.write("pushd \"%~dp0\\..\\..\\..\"\n")
-            bf.write(f"set OCTOPUS_ALLOWED_AGENTS_PATH=%CD%\\local_store\\agents\\{phc_id}\\active_agents.json\n")
-            bf.write("set PYEXE=python\n")
-            bf.write("if exist .venv\\Scripts\\python.exe set PYEXE=.venv\\Scripts\\python.exe\n")
-            bf.write("cd /d agent_provider\\octopus\n")
-            reason = manifest.get("modules", {}).get("reasoning", [])
-            labels = [str(m or "") for m in reason]
-            prov = "openai"
-            try:
-                lab_set = set(labels)
-                if ("rag-openai" in lab_set) and ("rag-deepseek" in lab_set):
-                    prov = "openai"
-                elif ("rag-openai" in lab_set):
-                    prov = "openai"
-                elif ("rag-deepseek" in lab_set):
-                    prov = "deepseek"
-                else:
-                    prov = "openai"
-            except Exception:
+        bat_path = None
+        reason = manifest.get("modules", {}).get("reasoning", [])
+        labels = [str(m or "") for m in reason]
+        prov = "openai"
+        try:
+            lab_set = set(labels)
+            if ("rag-openai" in lab_set):
                 prov = "openai"
-            bf.write(f"set MODEL_PROVIDER={prov}\n")
-            inputs = manifest.get("modules", {}).get("inputs", [])
-            try:
-                allow_img = ("image" in [str(x or "") for x in inputs])
-            except Exception:
-                allow_img = False
-            bf.write(f"set INPUTS_INCLUDE_IMAGE={'true' if allow_img else 'false'}\n")
-            outputs = manifest.get("modules", {}).get("outputs", [])
-            try:
-                allow_speech = ("speech" in [str(x or "") for x in outputs])
-            except Exception:
-                allow_speech = False
-            bf.write(f"set OUTPUTS_INCLUDE_SPEECH={'true' if allow_speech else 'false'}\n")
-            bf.write("start \"OctopusServer\" %PYEXE% -m octopus.octopus --port 9527\n")
-            bf.write("timeout /t 2 >nul\n")
-            bf.write("start \"\" http://localhost:9527/\n")
-            bf.write("popd\n")
+            else:
+                prov = "openai"
+        except Exception:
+            prov = "openai"
+        inputs = manifest.get("modules", {}).get("inputs", [])
+        try:
+            allow_img = ("image" in [str(x or "") for x in inputs])
+        except Exception:
+            allow_img = False
+        outputs = manifest.get("modules", {}).get("outputs", [])
+        try:
+            allow_speech = ("speech" in [str(x or "") for x in outputs])
+        except Exception:
+            allow_speech = False
         personal_bat = None
         try:
             import shutil
@@ -511,7 +536,7 @@ def user_create_agent(req: RequestCreateAgent) -> Dict[str, Any]:
                 pbf.write("popd\n")
         except Exception:
             personal_bat = None
-        return {"success": True, "agent_path": path, "manifest": manifest, "launcher": bat_path, "personal_launcher": personal_bat, "allowed": allowed_agents}
+        return {"success": True, "agent_path": path, "manifest": manifest, "launcher": None, "personal_launcher": personal_bat, "allowed": allowed_agents}
     except Exception:
         return {"success": False}
 
@@ -572,7 +597,41 @@ def user_update_submit(req: RequestUpdateSubmit) -> Dict[str, Any]:
         hid_use = hid_str if is_hex else sha256_hex(hid_str)
     except Exception:
         hid_use = sha256_hex(str(req.hid))
+    # Compute code-based CMI for updated configuration
+    try:
+        import os, shutil
+        phc = req.phc or {}
+        phc_id = (phc.get("id") or "phc").replace(":", "_")
+        root = os.path.join(os.getcwd(), "local_store", "agents", phc_id)
+        os.makedirs(root, exist_ok=True)
+        features = [m.get("label") for m in (req.cmc[0] if len(req.cmc)>0 else [])]
+        mapping = {"text-processing": "text_processor", "news-search": "news", "web_browsing": "web_browsing"}
+        allowed_agents = [mapping.get(x, "") for x in features]
+        allowed_agents = [x for x in allowed_agents if x]
+        personal_dir = os.path.join(root, "octopus_build")
+        src_dir = os.path.join(os.getcwd(), "agent_provider", "octopus")
+        if os.path.exists(personal_dir):
+            shutil.rmtree(personal_dir, ignore_errors=True)
+        shutil.copytree(src_dir, personal_dir, dirs_exist_ok=False)
+        prune_map = {
+            "text_processor": os.path.join(personal_dir, "octopus", "agents", "text_processor_agent.py"),
+            "news": os.path.join(personal_dir, "octopus", "agents", "news_agent.py"),
+            "web_browsing": os.path.join(personal_dir, "octopus", "agents", "web_browsing_agent.py"),
+        }
+        keep = set(allowed_agents)
+        for name, fpath in prune_map.items():
+            if name not in keep and os.path.exists(fpath):
+                try:
+                    os.remove(fpath)
+                except Exception:
+                    pass
+        from crypto_lib import dir_code_cmi
+        cmi_code_int = dir_code_cmi(personal_dir)
+    except Exception:
+        cmi_code_int = None
     obj = {"CMC": req.cmc, "HID": hid_use, "PHC": req.phc}
+    if cmi_code_int is not None:
+        obj["CMI_code"] = str(int(cmi_code_int))
     cmc_enc = elgamal_encrypt_bytes(ap_dlog_pk, obj)
     url = req.base_url.rstrip('/') + '/v1/ap/update_submit'
     try:

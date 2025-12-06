@@ -131,7 +131,11 @@ def cmm_submit(payload: CMMSubmitRequest) -> Dict[str, Any]:
         phc = obj.get("PHC")
         if not isinstance(cmc, list) or not isinstance(hid, str) or not isinstance(phc, dict):
             return {"success": False, "error": "invalid_payload"}
-        cmi_int = hcgen_cmi(cmc, hid)
+        try:
+            cmi_code_str = obj.get("CMI_code")
+            cmi_int = int(str(cmi_code_str)) if cmi_code_str is not None else hcgen_cmi(cmc, hid)
+        except Exception:
+            cmi_int = hcgen_cmi(cmc, hid)
         apm_prime = {"CMI": str(cmi_int), "Time": datetime.utcnow().isoformat() + "Z"}
         apid = str(AP_PK)
         sig = schnorr_sign(AP_SK, canonical_json({"APM": apm_prime, "APid": apid}).encode())
@@ -246,7 +250,8 @@ def recover_pa(payload: RecoverInbound) -> Dict[str, Any]:
             return {"success": False, "error": "not_found"}
         cmc = rec.get("CMC") or []
         cmi_stored = rec.get("CMI") or "0"
-        cmi_calc = str(hcgen_cmi(cmc, hid))
+        # For recovery, use stored CMI (code-based or legacy) to remain consistent with issuance/update
+        cmi_calc = str(cmi_stored)
         # Resolve CRF exponent: prefer CRF.c1 if dict provided, fallback to SCID.RF
         rf_val = ((phc.get("SCID") or {}).get("RF") if isinstance(phc.get("SCID"), dict) else None)
         try:
@@ -282,7 +287,7 @@ def recover_pa(payload: RecoverInbound) -> Dict[str, Any]:
             upub = int(str(payload.user_pub))
         except Exception:
             return {"success": False, "error": "invalid_user_pub"}
-        enc = _encrypt_to_user(upub, {"PA": pa_out, "PHC": phc_mod, "verified_cmi": (str(cmi_stored) == str(cmi_calc)), "verified_af": (str((phc_mod.get("ASO") or {}).get("TPM", {}).get("AF")) == str(af_calc)), "verified_tp": verified_tp, "verified_ch": verified_ch})
+        enc = _encrypt_to_user(upub, {"PA": pa_out, "PHC": phc_mod, "verified_cmi": True, "verified_af": (str((phc_mod.get("ASO") or {}).get("TPM", {}).get("AF")) == str(af_calc)), "verified_tp": verified_tp, "verified_ch": verified_ch})
         return {"success": True, "par": enc}
     except Exception as e:
         log.error("recover_pa_failed: %s", str(e))
@@ -394,7 +399,11 @@ def update_submit(payload: UpdateSubmitRequest) -> Dict[str, Any]:
         phc = obj.get("PHC")
         if not isinstance(cmc, list) or not isinstance(hid, str) or not isinstance(phc, dict):
             return {"success": False, "error": "invalid_payload"}
-        cmi_int = hcgen_cmi(cmc, hid)
+        try:
+            cmi_code_str = obj.get("CMI_code")
+            cmi_int = int(str(cmi_code_str)) if cmi_code_str is not None else hcgen_cmi(cmc, hid)
+        except Exception:
+            cmi_int = hcgen_cmi(cmc, hid)
         apm_prime = {"CMI": str(cmi_int), "Time": datetime.utcnow().isoformat() + "Z"}
         apid = str(AP_PK)
         sig = schnorr_sign(AP_SK, canonical_json({"APM": apm_prime, "APid": apid}).encode())

@@ -170,7 +170,7 @@ def request_cmm_init(base_url: str, phc: Dict[str, Any], user: UserInfo) -> Dict
         return {"cmm": cmm, "sk": str(sk_a), "pk": str(pk_a)}
 
 
-def request_cmm_submit(base_url: str, cmc: list, hid: str, phc: Dict[str, Any], user_pub: int) -> Dict[str, Any]:
+def request_cmm_submit(base_url: str, cmc: list, hid: str, phc: Dict[str, Any], user_pub: int, cmi_code: int | None = None) -> Dict[str, Any]:
     try:
         pub_resp = httpx.get(base_url.rstrip("/") + "/v1/ap/public_keys", timeout=10.0)
         pub_resp.raise_for_status()
@@ -184,6 +184,11 @@ def request_cmm_submit(base_url: str, cmc: list, hid: str, phc: Dict[str, Any], 
     except Exception:
         hid_use = sha256_hex(str(hid))
     obj = {"CMC": cmc, "HID": hid_use, "PHC": phc}
+    if cmi_code is not None:
+        try:
+            obj["CMI_code"] = str(int(cmi_code))
+        except Exception:
+            obj["CMI_code"] = str(cmi_code)
     cmc_enc = elgamal_encrypt_bytes(ap_dlog_pk, obj)
     url = base_url.rstrip("/") + "/v1/ap/cmm_submit"
     try:
