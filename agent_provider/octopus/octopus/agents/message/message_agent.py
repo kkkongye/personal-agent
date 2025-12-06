@@ -8,7 +8,10 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any
 
-from openai import AsyncOpenAI
+try:
+    from openai import AsyncOpenAI
+except Exception:
+    AsyncOpenAI = None
 
 from octopus.agents.base_agent import BaseAgent
 from octopus.config.settings import get_settings
@@ -68,12 +71,18 @@ class MessageAgent(BaseAgent):
             "failed_deliveries": 0,
         }
 
-        # Initialize OpenAI client for ANP protocol
+        # Initialize OpenAI client for ANP protocol (optional)
         settings = get_settings()
-        self.openai_client = AsyncOpenAI(
-            api_key=settings.openai_api_key, base_url=settings.openai_base_url
-        )
         self.model = settings.openai_model or "gpt-4-turbo-preview"
+        if AsyncOpenAI and settings.openai_api_key:
+            try:
+                self.openai_client = AsyncOpenAI(
+                    api_key=settings.openai_api_key, base_url=settings.openai_base_url
+                )
+            except Exception:
+                self.openai_client = None
+        else:
+            self.openai_client = None
 
         # ANP Crawler instance (will be created per request)
         self._anp_crawler = None

@@ -464,7 +464,54 @@ def user_create_agent(req: RequestCreateAgent) -> Dict[str, Any]:
             bf.write("timeout /t 2 >nul\n")
             bf.write("start \"\" http://localhost:9527/\n")
             bf.write("popd\n")
-        return {"success": True, "agent_path": path, "manifest": manifest, "launcher": bat_path, "allowed": allowed_agents}
+        personal_bat = None
+        try:
+            import shutil
+            personal_dir = os.path.join(root, "octopus_build")
+            src_dir = os.path.join(os.getcwd(), "agent_provider", "octopus")
+            if os.path.exists(personal_dir):
+                shutil.rmtree(personal_dir, ignore_errors=True)
+            shutil.copytree(src_dir, personal_dir, dirs_exist_ok=False)
+            prune_map = {
+                "text_processor": os.path.join(personal_dir, "octopus", "agents", "text_processor_agent.py"),
+                "news": os.path.join(personal_dir, "octopus", "agents", "news_agent.py"),
+                "web_browsing": os.path.join(personal_dir, "octopus", "agents", "web_browsing_agent.py"),
+            }
+            keep = set(allowed_agents)
+            for name, fpath in prune_map.items():
+                if name not in keep and os.path.exists(fpath):
+                    try:
+                        os.remove(fpath)
+                    except Exception:
+                        pass
+            personal_bat = os.path.join(root, "launch_octopus_personal.bat")
+            with open(personal_bat, "w", encoding="utf-8") as pbf:
+                pbf.write("@echo off\n")
+                pbf.write("setlocal enabledelayedexpansion\n")
+                pbf.write("set SCRIPT_DIR=%~dp0\n")
+                pbf.write("set REPO_DIR=%SCRIPT_DIR%..\\..\\..\n")
+                pbf.write(f"set PERSONAL_DIR=%REPO_DIR%\\local_store\\agents\\{phc_id}\\octopus_build\n")
+                pbf.write(f"set ALLOWED_PATH=%REPO_DIR%\\local_store\\agents\\{phc_id}\\active_agents.json\n")
+                pbf.write("pushd \"%REPO_DIR%\"\n")
+                pbf.write("set PYEXE=python\n")
+                pbf.write("set VENV_PY=%REPO_DIR%\\.venv\\Scripts\\python.exe\n")
+                pbf.write("if exist \"%VENV_PY%\" set PYEXE=\"%VENV_PY%\"\n")
+                pbf.write("set OCTOPUS_ALLOWED_AGENTS_PATH=%ALLOWED_PATH%\n")
+                pbf.write("set MODEL_PROVIDER=openai\n")
+                pbf.write("set ANP_SDK_ENABLED=false\n")
+                pbf.write("set DOTENV_PATH=%REPO_DIR%\\agent_provider\\octopus\\.env\n")
+                pbf.write(f"set INPUTS_INCLUDE_IMAGE={'true' if allow_img else 'false'}\n")
+                pbf.write(f"set OUTPUTS_INCLUDE_SPEECH={'true' if allow_speech else 'false'}\n")
+                pbf.write("set PYTHONPATH=%PERSONAL_DIR%\n")
+                pbf.write("cd /d \"%PERSONAL_DIR%\"\n")
+                pbf.write("%PYEXE% -m octopus.octopus --port 9527\n")
+                pbf.write("if errorlevel 1 (echo Octopus failed to start. Press any key to view logs & pause)\n")
+                pbf.write("timeout /t 1 >nul\n")
+                pbf.write("start \"\" http://localhost:9527/\n")
+                pbf.write("popd\n")
+        except Exception:
+            personal_bat = None
+        return {"success": True, "agent_path": path, "manifest": manifest, "launcher": bat_path, "personal_launcher": personal_bat, "allowed": allowed_agents}
     except Exception:
         return {"success": False}
 

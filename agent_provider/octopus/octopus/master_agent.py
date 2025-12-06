@@ -68,17 +68,18 @@ class MasterAgent(BaseAgent):
         else:
             raise ValueError(f"Unsupported model provider: {self.model_provider}")
 
-        if not self.api_key:
-            raise ValueError(
-                "API key is required for the selected provider. Set the corresponding environment variable in .env (e.g., OPENAI_API_KEY or DEEPSEEK_API_KEY)."
-            )
 
         # Common generation settings
         self.temperature = settings.openai_temperature
         self.max_tokens = settings.openai_max_tokens
 
-        # Create client based on provider
-        self._initialize_client()
+        # Create client based on provider when API key is available; otherwise run in heuristic-only mode
+        if self.api_key:
+            self._initialize_client()
+        else:
+            self.client = None
+            self.async_client = None
+            self.logger.warning("No API key configured; running MasterAgent without LLM, using direct/heuristic agent selection only")
 
         # Use the configured model directly
         self.effective_model = self.model
