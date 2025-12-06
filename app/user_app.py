@@ -72,6 +72,11 @@ class RecoverBothRequest(BaseModel):
     tp_base: str
     ap_base: str
     user: UserInfo
+class BenchRequest(BaseModel):
+    loops: int = 100
+    size: int = 1024
+    exp_bits: int = 16
+    exp_fixed: int | None = None
 
 @app.post('/user/request_phc')
 def user_request_phc(req: RequestPHC) -> Dict[str, Any]:
@@ -97,6 +102,113 @@ def user_request_phc(req: RequestPHC) -> Dict[str, Any]:
             data = issue_phc(payload)
             return data
         raise HTTPException(status_code=status, detail=detail or "phc_secure_failed")
+
+@app.post('/bench/crypto')
+def bench_crypto(req: BenchRequest) -> Dict[str, Any]:
+    import time, os, secrets
+    from crypto_lib import (
+        elgamal_encrypt_bytes as elg_enc,
+        elgamal_decrypt_bytes as elg_dec,
+        schnorr_sign,
+        schnorr_verify,
+        sym_encrypt,
+        sym_decrypt,
+        sha256_hex,
+        canonical_json,
+        inv_mod,
+        generate_paillier_keypair,
+        paillier_encrypt,
+        paillier_decrypt,
+        ch_compute,
+        cch_compute,
+        DL_P,
+        dl_generate_keypair,
+    )
+    from crypto_lib.keys import TP_DL_SK, TP_DL_PK, AP_PK, TP_DL_PK as TP_PK_INT
+    loops = int(req.loops)
+    msg = os.urandom(int(req.size))
+    def avg(fn):
+        s = time.perf_counter()
+        for _ in range(loops):
+            fn()
+        e = time.perf_counter()
+        return (e - s) * 1000.0 / loops
+    te_enc = avg(lambda: elg_enc(int(TP_DL_PK), msg))
+    ct_once = elg_enc(int(TP_DL_PK), msg)
+    te_dec = avg(lambda: elg_dec(int(TP_DL_SK), ct_once))
+    key_sym = os.urandom(32)
+    tae = avg(lambda: sym_encrypt(key_sym, msg))
+    ct_sym = sym_encrypt(key_sym, msg)
+    tad = avg(lambda: sym_decrypt(key_sym, ct_sym))
+    th = avg(lambda: sha256_hex(msg.hex()))
+    prev0 = sha256_hex("seed")
+    data0 = canonical_json({"label": "x", "idx": 0})
+    chain_input0 = prev0 + data0
+    th_step = avg(lambda: sha256_hex(chain_input0))
+    def hash_chain_run():
+        prev = sha256_hex("seed")
+        for i in range(loops):
+            data = canonical_json({"label": "x", "idx": i})
+            prev = sha256_hex(prev + data)
+        return prev
+    s1 = time.perf_counter()
+    _ = hash_chain_run()
+    thc = (time.perf_counter() - s1) * 1000.0
+    thc_avg = thc / max(loops, 1)
+    sk_u, pk_u = dl_generate_keypair()
+    tsig = avg(lambda: schnorr_sign(int(sk_u), msg))
+    sig_once = schnorr_sign(int(sk_u), msg)
+    tver = avg(lambda: schnorr_verify(int(pk_u), msg, sig_once))
+    apm_obj = {"CMI": "1", "Time": "1"}
+    apa_obj = {"APid": str(AP_PK), "APproof": {"r": "0", "e": "0", "s": "0"}}
+    r_ap = secrets.randbelow(DL_P - 1) + 1
+    tch = avg(lambda: ch_compute(int(AP_PK), apm_obj, apa_obj, int(r_ap)))
+    cmi_int = 1
+    crf_int = 1
+    r_int = secrets.randbelow(DL_P - 1) + 1
+    tcch = avg(lambda: cch_compute(int(AP_PK), int(TP_PK_INT), int(cmi_int), int(crf_int), int(r_int)))
+    kp = generate_paillier_keypair(256)
+    m_int = int.from_bytes(os.urandom(32), "big")
+    tpe = avg(lambda: paillier_encrypt(kp.public, m_int))
+    c_paillier = paillier_encrypt(kp.public, m_int)
+    tpd = avg(lambda: paillier_decrypt(kp.private, c_paillier))
+    base = secrets.randbelow(DL_P - 2) + 2
+    exp_bits = max(1, int(getattr(req, "exp_bits", 16)))
+    exp_rand = secrets.randbelow(1 << exp_bits) + 1
+    e_fixed = int(getattr(req, "exp_fixed", 0) or 0) or ((1 << exp_bits) - 1)
+    tmu = avg(lambda: pow(base, exp_rand, DL_P))
+    tmu_fixed = avg(lambda: pow(base, e_fixed, DL_P))
+    texp = avg(lambda: pow(base, exp_rand))
+    texp_fixed = avg(lambda: pow(base, e_fixed))
+    tinv = avg(lambda: inv_mod(secrets.randbelow(DL_P - 1) + 1, DL_P))
+    return {
+        "loops": loops,
+        "size": int(req.size),
+        "results": {
+            "Te_enc_ms": te_enc,
+            "Te_dec_ms": te_dec,
+            "Tae_ms": tae,
+            "Tad_ms": tad,
+            "Th_ms": th,
+            "Th_step_ms": th_step,
+            "Thc_ms": thc,
+            "Thc_avg_ms": thc_avg,
+            "Tsig_ms": tsig,
+            "Tver_ms": tver,
+            "Tch_ms": tch,
+            "Tcch_ms": tcch,
+            "Tpe_ms": tpe,
+            "Tpd_ms": tpd,
+            "Tmu_fixed_ms": tmu_fixed,
+            "Texp_fixed_ms": texp_fixed,
+            "Tinv_ms": tinv,
+            "Tsg_ms": None,
+            "TBLS_ms": None,
+            "Tsig1_ms": None,
+            "Tver1_ms": None,
+        },
+        "unsupported": ["shamir", "bls", "ecdsa"],
+    }
 
 @app.post('/user/recover_phc')
 def user_recover_phc(req: RequestPHC) -> Dict[str, Any]:
