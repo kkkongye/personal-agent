@@ -14,7 +14,6 @@ from fastapi.staticfiles import StaticFiles
 from .agents.message.message_agent import MessageAgent
 from .api.ad_router import router as ad_router, get_agents_description
 from .api.ad_router import get_agent_info as _router_get_agent_info
-from .api.auth_middleware import auth_middleware
 from .api.chat_router import (
     router as chat_router,
     set_agents,
@@ -23,10 +22,6 @@ from .api.ap_router import router as ap_router
 from .config.settings import get_settings, set_cli_overrides
 
 # Import ANP Receiver Service
-from .core.receiver.anp_receiver import (
-    ANPReceiverService,
-    create_anp_receiver_service,
-)
 from .master_agent import MasterAgent
 from .utils.log_base import get_logger, setup_enhanced_logging
 from .router.rpc_services import load_allowed_agents_from_path, set_allowed_agents
@@ -45,7 +40,7 @@ text_processor_agent = None
 news_agent = None
 
 # Global ANP Receiver Service instance
-anp_receiver_service: ANPReceiverService | None = None
+anp_receiver_service = None
 
 
 @asynccontextmanager
@@ -167,7 +162,7 @@ async def lifespan(app: FastAPI):
     logger.info("Application shutdown completed")
 
 
-async def setup_anp_receiver_service(app: FastAPI) -> ANPReceiverService:
+async def setup_anp_receiver_service(app: FastAPI):
     """Create and configure ANP Receiver Service with single DID support."""
 
     # Get ANP configuration from settings
@@ -178,6 +173,8 @@ async def setup_anp_receiver_service(app: FastAPI) -> ANPReceiverService:
     gateway_url = settings.anp_gateway_ws_url or receiver_config.gateway_url
 
     # Create ANP Receiver Service
+    # Lazy import to avoid optional dependency at module import time
+    from .core.receiver.anp_receiver import create_anp_receiver_service
     service = await create_anp_receiver_service(
         app=app,
     )
@@ -231,9 +228,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Add authentication middleware
-app.middleware("http")(auth_middleware)
-logger.info("Authentication middleware added to FastAPI application")
+# Add authentication middleware (optional)
+try:
+    from .api.auth_middleware import auth_middleware
+    app.middleware("http")(auth_middleware)
+    logger.info("Authentication middleware added to FastAPI application")
+except Exception as e:
+    logger.warning(f"Authentication middleware disabled: {e}")
 
 # Mount static files
 web_dir = os.path.join(os.path.dirname(__file__), "..", "web")

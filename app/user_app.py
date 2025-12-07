@@ -1,11 +1,12 @@
 from fastapi import FastAPI, Response, Body
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Any, Dict
 from user.models import UserInfo, PIIModel, BIModel
 from user.apply_agent import request_phc_remote, request_pa_remote, request_cmm_init, request_cmm_submit
 from user.apply_agent import request_phc_secure
 from user.apply_agent import request_pa_recover
-from trust_provider.crypto import elgamal_decrypt_bytes
+from crypto_lib import elgamal_decrypt_bytes
 from user.crypto import canonical_json, sha256_hex
 from crypto_lib import compute_af_formal, hcgen_cmi, ch_compute, cch_compute
 from trust_provider.issue_phc import TP_DL_PK
@@ -20,6 +21,7 @@ from trust_provider.issue_phc import issue_phc, ASOCompleteModel
 
 app = FastAPI(title="User Service")
 app.include_router(pic_router, prefix="/v1")
+app.mount("/user/static", StaticFiles(directory=os.path.join(os.getcwd(), "app", "web_user")), name="user_static")
 
 class RequestPHC(BaseModel):
     base_url: str
@@ -72,6 +74,11 @@ class RecoverBothRequest(BaseModel):
     tp_base: str
     ap_base: str
     user: UserInfo
+class BenchRequest(BaseModel):
+    loops: int = 100
+    size: int = 1024
+    exp_bits: int = 16
+    exp_fixed: int | None = None
 
 @app.post('/user/request_phc')
 def user_request_phc(req: RequestPHC) -> Dict[str, Any]:
@@ -97,6 +104,113 @@ def user_request_phc(req: RequestPHC) -> Dict[str, Any]:
             data = issue_phc(payload)
             return data
         raise HTTPException(status_code=status, detail=detail or "phc_secure_failed")
+
+@app.post('/bench/crypto')
+def bench_crypto(req: BenchRequest) -> Dict[str, Any]:
+    import time, os, secrets
+    from crypto_lib import (
+        elgamal_encrypt_bytes as elg_enc,
+        elgamal_decrypt_bytes as elg_dec,
+        schnorr_sign,
+        schnorr_verify,
+        sym_encrypt,
+        sym_decrypt,
+        sha256_hex,
+        canonical_json,
+        inv_mod,
+        generate_paillier_keypair,
+        paillier_encrypt,
+        paillier_decrypt,
+        ch_compute,
+        cch_compute,
+        DL_P,
+        dl_generate_keypair,
+    )
+    from crypto_lib.keys import TP_DL_SK, TP_DL_PK, AP_PK, TP_DL_PK as TP_PK_INT
+    loops = int(req.loops)
+    msg = os.urandom(int(req.size))
+    def avg(fn):
+        s = time.perf_counter()
+        for _ in range(loops):
+            fn()
+        e = time.perf_counter()
+        return (e - s) * 1000.0 / loops
+    te_enc = avg(lambda: elg_enc(int(TP_DL_PK), msg))
+    ct_once = elg_enc(int(TP_DL_PK), msg)
+    te_dec = avg(lambda: elg_dec(int(TP_DL_SK), ct_once))
+    key_sym = os.urandom(32)
+    tae = avg(lambda: sym_encrypt(key_sym, msg))
+    ct_sym = sym_encrypt(key_sym, msg)
+    tad = avg(lambda: sym_decrypt(key_sym, ct_sym))
+    th = avg(lambda: sha256_hex(msg.hex()))
+    prev0 = sha256_hex("seed")
+    data0 = canonical_json({"label": "x", "idx": 0})
+    chain_input0 = prev0 + data0
+    th_step = avg(lambda: sha256_hex(chain_input0))
+    def hash_chain_run():
+        prev = sha256_hex("seed")
+        for i in range(loops):
+            data = canonical_json({"label": "x", "idx": i})
+            prev = sha256_hex(prev + data)
+        return prev
+    s1 = time.perf_counter()
+    _ = hash_chain_run()
+    thc = (time.perf_counter() - s1) * 1000.0
+    thc_avg = thc / max(loops, 1)
+    sk_u, pk_u = dl_generate_keypair()
+    tsig = avg(lambda: schnorr_sign(int(sk_u), msg))
+    sig_once = schnorr_sign(int(sk_u), msg)
+    tver = avg(lambda: schnorr_verify(int(pk_u), msg, sig_once))
+    apm_obj = {"CMI": "1", "Time": "1"}
+    apa_obj = {"APid": str(AP_PK), "APproof": {"r": "0", "e": "0", "s": "0"}}
+    r_ap = secrets.randbelow(DL_P - 1) + 1
+    tch = avg(lambda: ch_compute(int(AP_PK), apm_obj, apa_obj, int(r_ap)))
+    cmi_int = 1
+    crf_int = 1
+    r_int = secrets.randbelow(DL_P - 1) + 1
+    tcch = avg(lambda: cch_compute(int(AP_PK), int(TP_PK_INT), int(cmi_int), int(crf_int), int(r_int)))
+    kp = generate_paillier_keypair(256)
+    m_int = int.from_bytes(os.urandom(32), "big")
+    tpe = avg(lambda: paillier_encrypt(kp.public, m_int))
+    c_paillier = paillier_encrypt(kp.public, m_int)
+    tpd = avg(lambda: paillier_decrypt(kp.private, c_paillier))
+    base = secrets.randbelow(DL_P - 2) + 2
+    exp_bits = max(1, int(getattr(req, "exp_bits", 16)))
+    exp_rand = secrets.randbelow(1 << exp_bits) + 1
+    e_fixed = int(getattr(req, "exp_fixed", 0) or 0) or ((1 << exp_bits) - 1)
+    tmu = avg(lambda: pow(base, exp_rand, DL_P))
+    tmu_fixed = avg(lambda: pow(base, e_fixed, DL_P))
+    texp = avg(lambda: pow(base, exp_rand))
+    texp_fixed = avg(lambda: pow(base, e_fixed))
+    tinv = avg(lambda: inv_mod(secrets.randbelow(DL_P - 1) + 1, DL_P))
+    return {
+        "loops": loops,
+        "size": int(req.size),
+        "results": {
+            "Te_enc_ms": te_enc,
+            "Te_dec_ms": te_dec,
+            "Tae_ms": tae,
+            "Tad_ms": tad,
+            "Th_ms": th,
+            "Th_step_ms": th_step,
+            "Thc_ms": thc,
+            "Thc_avg_ms": thc_avg,
+            "Tsig_ms": tsig,
+            "Tver_ms": tver,
+            "Tch_ms": tch,
+            "Tcch_ms": tcch,
+            "Tpe_ms": tpe,
+            "Tpd_ms": tpd,
+            "Tmu_fixed_ms": tmu_fixed,
+            "Texp_fixed_ms": texp_fixed,
+            "Tinv_ms": tinv,
+            "Tsg_ms": None,
+            "TBLS_ms": None,
+            "Tsig1_ms": None,
+            "Tver1_ms": None,
+        },
+        "unsupported": ["shamir", "bls", "ecdsa"],
+    }
 
 @app.post('/user/recover_phc')
 def user_recover_phc(req: RequestPHC) -> Dict[str, Any]:
@@ -170,7 +284,47 @@ def user_cmm_submit(req: RequestCMMSubmit) -> Dict[str, Any]:
             raise ValueError("empty keys")
     except Exception:
         user_sk_int, user_pk_int = dl_generate_user_keypair()
-    out = request_cmm_submit(req.base_url, req.cmc, req.hid, req.phc, user_pk_int)
+    # Build personalized code snapshot to compute CMI from code hash chain
+    try:
+        import os, shutil, time
+        phc = req.phc or {}
+        phc_id = (phc.get("id") or "phc").replace(":", "_")
+        root = os.path.join(os.getcwd(), "local_store", "agents", phc_id)
+        os.makedirs(root, exist_ok=True)
+        # normalize HID for binding
+        try:
+            hid_str0 = str(req.hid or "")
+            is_hex0 = (len(hid_str0) == 64 and all(c in "0123456789abcdefABCDEF" for c in hid_str0))
+            hid_use0 = hid_str0 if is_hex0 else sha256_hex(hid_str0)
+        except Exception:
+            hid_use0 = sha256_hex(str(req.hid))
+        # derive allowed agents from CMC features
+        features = [m.get("label") for m in (req.cmc[0] if len(req.cmc)>0 else [])]
+        mapping = {"text-processing": "text_processor", "news-search": "news", "web-browsing": "web_browsing"}
+        allowed_agents = [mapping.get(x, "") for x in features]
+        allowed_agents = [x for x in allowed_agents if x]
+        personal_dir = os.path.join(root, "octopus_build")
+        src_dir = os.path.join(os.getcwd(), "agent_provider", "octopus")
+        if os.path.exists(personal_dir):
+            shutil.rmtree(personal_dir, ignore_errors=True)
+        shutil.copytree(src_dir, personal_dir, dirs_exist_ok=False)
+        prune_map = {
+            "text_processor": os.path.join(personal_dir, "octopus", "agents", "text_processor_agent.py"),
+            "news": os.path.join(personal_dir, "octopus", "agents", "news_agent.py"),
+            "web_browsing": os.path.join(personal_dir, "octopus", "agents", "web_browsing_agent.py"),
+        }
+        keep = set(allowed_agents)
+        for name, fpath in prune_map.items():
+            if name not in keep and os.path.exists(fpath):
+                try:
+                    os.remove(fpath)
+                except Exception:
+                    pass
+        from crypto_lib import dir_code_cmi_hid
+        cmi_code_int = dir_code_cmi_hid(personal_dir, hid_use0)
+    except Exception:
+        cmi_code_int = None
+    out = request_cmm_submit(req.base_url, req.cmc, req.hid, req.phc, user_pk_int, cmi_code=cmi_code_int)
     par = out.get("par")
     if not par:
         return out
@@ -184,7 +338,11 @@ def user_cmm_submit(req: RequestCMMSubmit) -> Dict[str, Any]:
         hid_use = hid_str if is_hex else sha256_hex(hid_str)
     except Exception:
         hid_use = sha256_hex(str(req.hid))
-    calc_cmi_int = hcgen_cmi(req.cmc, hid_use)
+    try:
+        from crypto_lib import dir_code_cmi_hid
+        calc_cmi_int = dir_code_cmi_hid(os.path.join(os.getcwd(), "local_store", "agents", (req.phc.get("id") or "phc").replace(":", "_"), "octopus_build"), hid_use)
+    except Exception:
+        calc_cmi_int = hcgen_cmi(req.cmc, hid_use)
     pa_cmi = ((obj.get("PA") or {}).get("APM") or {}).get("CMI")
     verified_cmi = (str(calc_cmi_int) == str(pa_cmi))
     # Verify AF formal: AF ?= H(ID) · pk_ap^CMI' · pk_tp^CRF · g^r_bind''
@@ -301,7 +459,17 @@ def user_create_agent(req: RequestCreateAgent) -> Dict[str, Any]:
         }
         root = os.path.join(os.getcwd(), "local_store", "agents", phc_id)
         os.makedirs(root, exist_ok=True)
-        path = os.path.join(root, f"agent_manifest_{int(time.time())}.json")
+        # keep a single manifest file; remove old timestamped manifests
+        try:
+            import glob
+            for old in glob.glob(os.path.join(root, "agent_manifest_*.json")):
+                try:
+                    os.remove(old)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        path = os.path.join(root, "agent_manifest.json")
         with open(path, "w", encoding="utf-8") as f:
             json.dump(manifest, f, ensure_ascii=False, indent=2)
         features = manifest.get("modules", {}).get("features", [])
@@ -311,48 +479,76 @@ def user_create_agent(req: RequestCreateAgent) -> Dict[str, Any]:
         active_path = os.path.join(root, "active_agents.json")
         with open(active_path, "w", encoding="utf-8") as f2:
             json.dump({"allowed_agents": allowed_agents}, f2, ensure_ascii=False, indent=2)
-        bat_path = os.path.join(root, "launch_octopus.bat")
-        with open(bat_path, "w", encoding="utf-8") as bf:
-            bf.write("@echo off\n")
-            bf.write("setlocal enabledelayedexpansion\n")
-            bf.write("pushd \"%~dp0\\..\\..\\..\"\n")
-            bf.write(f"set OCTOPUS_ALLOWED_AGENTS_PATH=%CD%\\local_store\\agents\\{phc_id}\\active_agents.json\n")
-            bf.write("set PYEXE=python\n")
-            bf.write("if exist .venv\\Scripts\\python.exe set PYEXE=.venv\\Scripts\\python.exe\n")
-            bf.write("cd /d agent_provider\\octopus\n")
-            reason = manifest.get("modules", {}).get("reasoning", [])
-            labels = [str(m or "") for m in reason]
-            prov = "openai"
-            try:
-                lab_set = set(labels)
-                if ("rag-openai" in lab_set) and ("rag-deepseek" in lab_set):
-                    prov = "openai"
-                elif ("rag-openai" in lab_set):
-                    prov = "openai"
-                elif ("rag-deepseek" in lab_set):
-                    prov = "deepseek"
-                else:
-                    prov = "openai"
-            except Exception:
+        bat_path = None
+        reason = manifest.get("modules", {}).get("reasoning", [])
+        labels = [str(m or "") for m in reason]
+        prov = "openai"
+        try:
+            lab_set = set(labels)
+            if ("rag-openai" in lab_set):
                 prov = "openai"
-            bf.write(f"set MODEL_PROVIDER={prov}\n")
-            inputs = manifest.get("modules", {}).get("inputs", [])
-            try:
-                allow_img = ("image" in [str(x or "") for x in inputs])
-            except Exception:
-                allow_img = False
-            bf.write(f"set INPUTS_INCLUDE_IMAGE={'true' if allow_img else 'false'}\n")
-            outputs = manifest.get("modules", {}).get("outputs", [])
-            try:
-                allow_speech = ("speech" in [str(x or "") for x in outputs])
-            except Exception:
-                allow_speech = False
-            bf.write(f"set OUTPUTS_INCLUDE_SPEECH={'true' if allow_speech else 'false'}\n")
-            bf.write("start \"OctopusServer\" %PYEXE% -m octopus.octopus --port 9527\n")
-            bf.write("timeout /t 2 >nul\n")
-            bf.write("start \"\" http://localhost:9527/\n")
-            bf.write("popd\n")
-        return {"success": True, "agent_path": path, "manifest": manifest, "launcher": bat_path, "allowed": allowed_agents}
+            else:
+                prov = "openai"
+        except Exception:
+            prov = "openai"
+        inputs = manifest.get("modules", {}).get("inputs", [])
+        try:
+            allow_img = ("image" in [str(x or "") for x in inputs])
+        except Exception:
+            allow_img = False
+        outputs = manifest.get("modules", {}).get("outputs", [])
+        try:
+            allow_speech = ("speech" in [str(x or "") for x in outputs])
+        except Exception:
+            allow_speech = False
+        personal_bat = None
+        try:
+            import shutil
+            personal_dir = os.path.join(root, "octopus_build")
+            src_dir = os.path.join(os.getcwd(), "agent_provider", "octopus")
+            if os.path.exists(personal_dir):
+                shutil.rmtree(personal_dir, ignore_errors=True)
+            shutil.copytree(src_dir, personal_dir, dirs_exist_ok=False)
+            prune_map = {
+                "text_processor": os.path.join(personal_dir, "octopus", "agents", "text_processor_agent.py"),
+                "news": os.path.join(personal_dir, "octopus", "agents", "news_agent.py"),
+                "web_browsing": os.path.join(personal_dir, "octopus", "agents", "web_browsing_agent.py"),
+            }
+            keep = set(allowed_agents)
+            for name, fpath in prune_map.items():
+                if name not in keep and os.path.exists(fpath):
+                    try:
+                        os.remove(fpath)
+                    except Exception:
+                        pass
+            personal_bat = os.path.join(root, "launch_octopus_personal.bat")
+            with open(personal_bat, "w", encoding="utf-8") as pbf:
+                pbf.write("@echo off\n")
+                pbf.write("setlocal enabledelayedexpansion\n")
+                pbf.write("set SCRIPT_DIR=%~dp0\n")
+                pbf.write("set REPO_DIR=%SCRIPT_DIR%..\\..\\..\n")
+                pbf.write(f"set PERSONAL_DIR=%REPO_DIR%\\local_store\\agents\\{phc_id}\\octopus_build\n")
+                pbf.write(f"set ALLOWED_PATH=%REPO_DIR%\\local_store\\agents\\{phc_id}\\active_agents.json\n")
+                pbf.write("pushd \"%REPO_DIR%\"\n")
+                pbf.write("set PYEXE=python\n")
+                pbf.write("set VENV_PY=%REPO_DIR%\\.venv\\Scripts\\python.exe\n")
+                pbf.write("if exist \"%VENV_PY%\" set PYEXE=\"%VENV_PY%\"\n")
+                pbf.write("set OCTOPUS_ALLOWED_AGENTS_PATH=%ALLOWED_PATH%\n")
+                pbf.write("set MODEL_PROVIDER=openai\n")
+                pbf.write("set ANP_SDK_ENABLED=false\n")
+                pbf.write("set DOTENV_PATH=%REPO_DIR%\\agent_provider\\octopus\\.env\n")
+                pbf.write(f"set INPUTS_INCLUDE_IMAGE={'true' if allow_img else 'false'}\n")
+                pbf.write(f"set OUTPUTS_INCLUDE_SPEECH={'true' if allow_speech else 'false'}\n")
+                pbf.write("set PYTHONPATH=%PERSONAL_DIR%\n")
+                pbf.write("cd /d \"%PERSONAL_DIR%\"\n")
+                pbf.write("%PYEXE% -m octopus.octopus --port 9527\n")
+                pbf.write("if errorlevel 1 (echo Octopus failed to start. Press any key to view logs & pause)\n")
+                pbf.write("timeout /t 1 >nul\n")
+                pbf.write("start \"\" http://localhost:9527/\n")
+                pbf.write("popd\n")
+        except Exception:
+            personal_bat = None
+        return {"success": True, "agent_path": path, "manifest": manifest, "launcher": None, "personal_launcher": personal_bat, "allowed": allowed_agents}
     except Exception:
         return {"success": False}
 
@@ -367,7 +563,7 @@ def user_recover_pa(req: RequestPARecover) -> Dict[str, Any]:
 def user_update_init(req: RequestUpdateInit) -> Dict[str, Any]:
     try:
         import httpx
-        pub_resp = httpx.get(req.base_url.rstrip('/') + '/v1/ap/public_keys', timeout=10.0)
+        pub_resp = httpx.get(req.base_url.rstrip('/') + '/ap/public_keys', timeout=10.0)
         pub_resp.raise_for_status()
         ap_dlog_pk = int(str(pub_resp.json()["ap_dlog_pk"]))
     except Exception:
@@ -413,8 +609,43 @@ def user_update_submit(req: RequestUpdateSubmit) -> Dict[str, Any]:
         hid_use = hid_str if is_hex else sha256_hex(hid_str)
     except Exception:
         hid_use = sha256_hex(str(req.hid))
+    # Compute code-based CMI for updated configuration
+    try:
+        import os, shutil
+        phc = req.phc or {}
+        phc_id = (phc.get("id") or "phc").replace(":", "_")
+        root = os.path.join(os.getcwd(), "local_store", "agents", phc_id)
+        os.makedirs(root, exist_ok=True)
+        features = [m.get("label") for m in (req.cmc[0] if len(req.cmc)>0 else [])]
+        mapping = {"text-processing": "text_processor", "news-search": "news", "web_browsing": "web_browsing"}
+        allowed_agents = [mapping.get(x, "") for x in features]
+        allowed_agents = [x for x in allowed_agents if x]
+        personal_dir = os.path.join(root, "octopus_build")
+        src_dir = os.path.join(os.getcwd(), "agent_provider", "octopus")
+        if os.path.exists(personal_dir):
+            shutil.rmtree(personal_dir, ignore_errors=True)
+        shutil.copytree(src_dir, personal_dir, dirs_exist_ok=False)
+        prune_map = {
+            "text_processor": os.path.join(personal_dir, "octopus", "agents", "text_processor_agent.py"),
+            "news": os.path.join(personal_dir, "octopus", "agents", "news_agent.py"),
+            "web_browsing": os.path.join(personal_dir, "octopus", "agents", "web_browsing_agent.py"),
+        }
+        keep = set(allowed_agents)
+        for name, fpath in prune_map.items():
+            if name not in keep and os.path.exists(fpath):
+                try:
+                    os.remove(fpath)
+                except Exception:
+                    pass
+        from crypto_lib import dir_code_cmi
+        cmi_code_int = dir_code_cmi(personal_dir)
+    except Exception:
+        cmi_code_int = None
     obj = {"CMC": req.cmc, "HID": hid_use, "PHC": req.phc}
-    cmc_enc = elgamal_encrypt_bytes(ap_dlog_pk, obj)
+    if cmi_code_int is not None:
+        obj["CMI_code"] = str(int(cmi_code_int))
+    # Send plaintext payload for update_submit; server supports both encrypted and plaintext
+    cmc_enc = obj
     url = req.base_url.rstrip('/') + '/v1/ap/update_submit'
     try:
         import httpx
@@ -469,249 +700,13 @@ def user_update_submit(req: RequestUpdateSubmit) -> Dict[str, Any]:
 
 @app.get('/user')
 def ui() -> Response:
-    html = """
-    <!doctype html><html><head><meta charset='utf-8'><title>User UI</title>
-    <style>body{font-family:system-ui,Segoe UI,Arial;margin:24px} input,button{padding:8px;margin:4px} pre{background:#f6f8fa;padding:12px;border:1px solid #e1e4e8;overflow:auto}</style>
-    </head><body>
-    <h2>User</h2>
-    <div>
-        <div><label>TP Base:  http://127.0.0.1:8001</label></div>
-        <div><label>AP Base:  http://127.0.0.1:8002</label></div>
-    </div>
-    <div>
-      <label>Name</label><input id=name value="Alice">
-      <label>ID</label><input id=idnum value="ID123">
-      <label>ID Card</label><input id=idcard value="IDCARD123456">
-      <label>Email</label><input id=email value="alice@example.com">
-      <label>Passport</label><input id=passport value="P123456789"><label>Photo</label><input id=picfile type=file accept="image/*">
-    </div>
-    <button id=issue>1.请求 PHC</button>
-    <pre id=phc></pre>
-    <button id=fetchcmm disabled>2.选择PA的配置信息</button>
-    <div id=cmm_ui></div>
-    <button id=submitcmc disabled>提交PA的配置信息</button>
-    <pre id=pa_cmm></pre>
-    <pre id=hash_ch></pre>
-    <pre id=hash_cch></pre>
-    <pre id=hash_status></pre>
-
-    <button id=createAgent disabled>3.创建个人智能体</button>
-    <pre id=agent_out></pre>
-    <button id=recoverpa disabled>4.PA丢失，恢复PA</button>
-    <button id=recoverboth>PHC与PA都丢失，恢复PA</button>
-    <pre id=pa_recover></pre>
-    <button id=updatepa disabled>5.更新PA的配置信息</button>
-    <div id=upd_cmm_ui></div>
-    <button id=submitUpdate disabled>提交更新</button>
-    <pre id=pa_update></pre>
-    
-    
-    <script>
-        const tpEl=document.getElementById('tp');
-        const apEl=document.getElementById('ap');
-        const name=document.getElementById('name');
-        const idnum=document.getElementById('idnum');
-        const email=document.getElementById('email');
-        const idcard=document.getElementById('idcard');
-        const passport=document.getElementById('passport');
-        const phcPre=document.getElementById('phc');
-    const paCmm=document.getElementById('pa_cmm');
-    const hashCH=document.getElementById('hash_ch');
-    const hashCCH=document.getElementById('hash_cch');
-    const hashStatus=document.getElementById('hash_status');
-        const paRecover=document.getElementById('pa_recover');
-    const cmmUI=document.getElementById('cmm_ui');
-    const zhCat=['功能','输入','推理','知识','输出'];
-    const zhLabelMap={
-      'text':'文本',
-      'voice':'语音',
-      'image':'图像',
-      'video':'视频',
-      'sensor':'传感器',
-      'system-event':'系统事件',
-      'rule-engine':'规则引擎',
-      'bayesian-net':'贝叶斯网络',
-      'fuzzy-logic':'模糊逻辑',
-      'llm':'大模型',
-      'retrieval':'检索',
-      'neural-network':'神经网络',
-      'planner':'规划',
-      'safety-filter':'安全过滤',
-      'local-memory':'本地记忆',
-      'long-term-memory':'长期记忆',
-      'vector-index':'向量索引',
-      'knowledge-base':'知识库',
-      'shared-org-data':'组织共享数据',
-      'browser':'浏览器',
-      'external-api':'外部API',
-      'database':'数据库',
-      'blockchain':'区块链',
-      'ipfs':'IPFS',
-      'iot-device':'物联网设备',
-      'cloud-storage':'云存储',
-      'speech':'语音',
-      'notification':'通知',
-      'json-api':'JSON API',
-      'actuation':'执行'
-    };
-    const zhLabelMapExtra={
-      'text-processing':'文本处理',
-      'news-search':'新闻查询',
-      'payment':'支付',
-      'web-browsing':'联网搜索',
-      'rag-openai':'RAG+OPENAI',
-      'rag-deepseek':'RAG+deepseek',
-      'knowledge-pro':'专业知识库',
-      'ppt':'ppt'
-    };
-        let phcObj=null;
-        let cmmObj=null;
-        let cmcObj=null;
-        
-        document.getElementById('issue').onclick = async ()=>{
-        const tpBase = tpEl && tpEl.value ? tpEl.value : 'http://127.0.0.1:8001';
-        const f = document.getElementById('picfile')?.files?.[0];
-        if (!f) { phcPre.textContent='请先选择照片再申请 PHC'; return; }
-        const fd=new FormData(); fd.append('file', f);
-        let picString=null;
-        try {
-          const rUpload=await fetch('/v1/pic/upload',{method:'POST',body:fd});
-          const dUpload=await rUpload.json();
-          picString = dUpload.string_part || null;
-          if (!picString) { phcPre.textContent='图片上传失败，请重试'; return; }
-        } catch (e) { phcPre.textContent='图片上传失败：'+(e&&e.message?e.message:'unknown'); return; }
-        const user={pii:{name:name.value,id_number:idnum.value,id_card_number:(idcard?idcard.value:''),email:email.value},bi:{last_login_ip:'127.0.0.1',passport_number:(passport?passport.value:''),pic_string:picString},cdid:'cdid:user.placeholder',ecid:'g'};
-        const payload={base_url:tpBase,user};
-        try{
-            const r=await fetch('/user/request_phc',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
-            const data=await r.json(); phcObj = data.phc || data.PHC || null; phcPre.textContent=JSON.stringify(data,null,2); document.getElementById('fetchcmm').disabled=!phcObj; document.getElementById('recoverpa').disabled=!phcObj; const updBtn=document.getElementById('updatepa'); if(updBtn) updBtn.disabled=!phcObj;
-        }catch(e){ phcPre.textContent='Request PHC failed: '+(e&&e.message?e.message:'unknown'); }
-        };
-
-        document.getElementById('fetchcmm').onclick = async ()=>{
-        const apBase = 'http://127.0.0.1:8002';
-        const user={pii:{name:name.value,id_number:idnum.value,id_card_number:(idcard?idcard.value:''),email:email.value},bi:{last_login_ip:'127.0.0.1',passport_number:(passport?passport.value:'')},cdid:'cdid:user.placeholder',ecid:'g'};
-        const r=await fetch('/user/cmm_init',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({base_url:apBase, phc:phcObj, user})});
-      const data=await r.json(); cmmObj=data.cmm; cmcObj=(cmmObj||[]).map(row=>row[0]);
-      window.__cmmSk = String(data.sk||""); window.__cmmPk = String(data.pk||"");
-        const htmlRows=(cmmObj||[]).map((row,i)=>{
-            const opts=row.map((opt,j)=>`<label><input type=checkbox name=\"row_${i}\" value='${j}'>${(zhLabelMap[opt.label]||zhLabelMapExtra[opt.label]||opt.label)}</label>`).join(' ');
-            return `<div>${zhCat[i]}：${opts}</div>`;
-        }).join('');
-      cmmUI.innerHTML = htmlRows;
-      document.getElementById('submitcmc').disabled = !(window.__cmmSk && window.__cmmPk);
-        };
-        
-        document.getElementById('submitcmc').onclick = async ()=>{
-        const apBase = 'http://127.0.0.1:8002';
-        const hid = idnum.value? (await (async()=>{return (idnum.value)})()) : '';
-        const cmc = (cmmObj||[]).map((row,i)=>{ const nodes = Array.from(document.querySelectorAll(`input[name='row_${i}']:checked`)); const idxs = nodes.map(n=>Number(n.value)); return row.filter((_,j)=>idxs.includes(j)); });
-        cmcObj = cmc;
-        const r=await fetch('/user/cmm_submit',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({base_url:apBase, cmc:cmc||[], hid:hid, phc:phcObj, user_sk: window.__cmmSk||"", user_pk: window.__cmmPk||""})});
-      const data=await r.json();
-      paCmm.textContent=JSON.stringify(data,null,2);
-      hashCH.textContent = 'CH: ' + String(data.CH || '');
-      hashCCH.textContent = 'CCH: ' + String(data.CCH || '');
-      hashStatus.textContent = 'verified_ch: ' + String(data.verified_ch_user || false) + ', verified_cch: ' + String(data.verified_cch_user || false);
-      const recoverBtn = document.getElementById('recoverpa'); if(recoverBtn) recoverBtn.disabled = false;
-      window.__PHC = data.PHC; window.__PA = data.PA;
-      const revealBtn = document.getElementById('reveal'); if(revealBtn) revealBtn.disabled = !(window.__PHC);
-      const createBtn = document.getElementById('createAgent');
-      if(createBtn){
-        createBtn.disabled = !(window.__PHC && window.__PA);
-        createBtn.onclick = async ()=>{
-          const payload2 = { phc: window.__PHC||{}, pa: window.__PA||{}, cmc: cmcObj||[] };
-          const r2=await fetch('/user/create_agent',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload2)});
-          const data2=await r2.json(); const out = document.getElementById('agent_out'); if(out) out.textContent=JSON.stringify(data2,null,2);
-        };
-      }
-        };
-        
-
-
-        document.getElementById('recoverpa').onclick = async ()=>{
-        const apBase = apEl && apEl.value ? apEl.value : 'http://127.0.0.1:8002';
-        const user={pii:{name:name.value,id_number:idnum.value,id_card_number:(idcard?idcard.value:''),email:email.value},bi:{last_login_ip:'127.0.0.1',passport_number:(passport?passport.value:'')},cdid:'cdid:user.placeholder',ecid:'g'};
-        const payload={base_url:apBase, phc:phcObj, user};
-        try{
-            const r=await fetch('/user/recover_pa',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
-            const data=await r.json(); paRecover.textContent=JSON.stringify(data,null,2);
-        }catch(e){ paRecover.textContent='Recover PA failed: '+(e&&e.message?e.message:'unknown'); }
-        };
-
-        document.getElementById('recoverboth').onclick = async ()=>{
-        const tpBase = 'http://127.0.0.1:8001';
-        const apBase = 'http://127.0.0.1:8002';
-        const user={pii:{name:name.value,id_number:idnum.value,id_card_number:(idcard?idcard.value:''),email:email.value},bi:{last_login_ip:'127.0.0.1',passport_number:(passport?passport.value:'')},cdid:'cdid:user.placeholder',ecid:'g'};
-        try {
-            const r=await fetch('/user/recover_both',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({tp_base:tpBase, ap_base:apBase, user})});
-            const data=await r.json(); paRecover.textContent=JSON.stringify(data,null,2);
-            window.__PHC = data.phc || null;
-        }catch(e){ paRecover.textContent='Recover Both failed: '+(e&&e.message?e.message:'unknown'); }
-        };
-
-        const revealEl = document.getElementById('reveal');
-        if (revealEl) {
-          revealEl.onclick = async ()=>{
-            const tpBase = 'http://127.0.0.1:8001';
-            try{
-                const r=await fetch('/user/reveal',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({base_url:tpBase, phc:window.__PHC||phcObj||{}})});
-                const data=await r.json(); const out=document.getElementById('reveal_out'); if(out) out.textContent=JSON.stringify(data,null,2);
-            }catch(e){ const out=document.getElementById('reveal_out'); if(out) out.textContent='Reveal failed: '+(e&&e.message?e.message:'unknown'); }
-          };
-        }
-
-        document.getElementById('updatepa').onclick = async ()=>{
-        const apBase = apEl && apEl.value ? apEl.value : 'http://127.0.0.1:8002';
-        const user={pii:{name:name.value,id_number:idnum.value,id_card_number:(idcard?idcard.value:''),email:email.value},bi:{last_login_ip:'127.0.0.1',passport_number:(passport?passport.value:'')},cdid:'cdid:user.placeholder',ecid:'g'};
-        const out=document.getElementById('pa_update');
-        if(!phcObj){ out.textContent='请先点击 1.Request PHC'; return; }
-        try{
-          const r=await fetch('/user/update_init',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({base_url:apBase, phc:phcObj, user})});
-          const data=await r.json(); const cmm=data.cmm; window.__updSk=String(data.sk||""); window.__updPk=String(data.pk||""); window.__lastCMM=cmm;
-          const updUI=document.getElementById('upd_cmm_ui');
-          const htmlRows=(cmm||[]).map((row,i)=>{ const opts=row.map((opt,j)=>`<label><input type=checkbox name=\"upd_row_${i}\" value='${j}'>${(zhLabelMap[opt.label]||zhLabelMapExtra[opt.label]||opt.label)}</label>`).join(' '); return `<div>${zhCat[i]}：${opts}</div>`; }).join('');
-          updUI.innerHTML = htmlRows;
-          document.getElementById('submitUpdate').disabled = !((cmm && cmm.length>0) && (window.__updSk && window.__updPk));
-        }catch(e){ out.textContent='Update PA failed: '+(e&&e.message?e.message:'unknown'); }
-        };
-
-        document.getElementById('submitUpdate').onclick = async ()=>{
-        const apBase = apEl && apEl.value ? apEl.value : 'http://127.0.0.1:8002';
-        const hid = idnum.value? (await (async()=>{return (idnum.value)})()) : '';
-        const cmc = (window.__lastCMM||[]).map((row,i)=>{ const nodes = Array.from(document.querySelectorAll(`input[name='upd_row_${i}']:checked`)); const idxs = nodes.map(n=>Number(n.value)); return row.filter((_,j)=>idxs.includes(j)); });
-        const payload={base_url:apBase, cmc:cmc||[], hid:hid, phc:phcObj, user_sk: window.__updSk||"", user_pk: window.__updPk||""};
-        const r=await fetch('/user/update_submit',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
-        const data=await r.json(); const out=document.getElementById('pa_update'); out.textContent=JSON.stringify(data,null,2);
-        try{
-          const btnId = 'updateCreateAgent';
-          let btn = document.getElementById(btnId);
-          if(!btn){
-            btn = document.createElement('button');
-            btn.id = btnId;
-            btn.textContent = '更新个人智能体';
-            const target = document.getElementById('pa_update');
-            target.insertAdjacentElement('afterend', btn);
-          }
-          let agentOut = document.getElementById('agent_update');
-          if(!agentOut){
-            agentOut = document.createElement('pre');
-            agentOut.id = 'agent_update';
-            btn.insertAdjacentElement('afterend', agentOut);
-          }
-          btn.disabled = !(data && data.PHC && data.PA);
-          btn.onclick = async ()=>{
-            const payload2 = { phc: data.PHC||{}, pa: data.PA||{}, cmc: cmc||[] };
-            const r2 = await fetch('/user/create_agent',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload2)});
-            const data2 = await r2.json();
-            agentOut.textContent = JSON.stringify(data2,null,2);
-          };
-        }catch(e){}
-        };
-    </script>
-    </body></html>
-    """
-    return Response(content=html, media_type='text/html')
+    import os
+    path = os.path.join(os.getcwd(), "app", "web_user", "index.html")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return Response(content=f.read(), media_type='text/html')
+    except Exception:
+        return Response(content="<h1>Missing user UI</h1>", media_type='text/html')
 class RequestPARecover(BaseModel):
     base_url: str
     phc: Dict[str, Any]
