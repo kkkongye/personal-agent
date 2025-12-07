@@ -32,3 +32,6 @@ class AFResult(BaseModel):
 class PHCResponse(BaseModel):
     success: bool
     phc: Dict[str, Any]
+    mode: Optional[str] = None
+    face_verified: Optional[bool] = None
+    face_check_ms: Optional[float] = None

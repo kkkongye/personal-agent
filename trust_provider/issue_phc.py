@@ -46,6 +46,8 @@ from pydantic import BaseModel
 import hashlib
 import secrets
 import os
+import time
+import sys
 try:
     import pymysql
 except Exception:
@@ -58,11 +60,16 @@ router = APIRouter()
 
 def _mysql_get_pic_string_by_user_id(user_id: str) -> Optional[str]:
     if pymysql is None:
-        raise HTTPException(status_code=500, detail="db_driver_missing")
+        raise HTTPException(status_code=500, detail={
+            "error": "db_driver_missing",
+            "python": sys.version,
+            "executable": sys.executable,
+            "cwd": os.getcwd(),
+        })
     host = os.getenv("MYSQL_HOST") or "127.0.0.1"
     port = int(os.getenv("MYSQL_PORT") or "3306")
     user = os.getenv("MYSQL_USER") or "root"
-    password = os.getenv("MYSQL_PASSWORD") or "1234"
+    password = os.getenv("MYSQL_PASSWORD") or "123456"
     db = os.getenv("MYSQL_DB") or "avatar"
     table = os.getenv("MYSQL_TABLE") or "bi"
     try:
@@ -76,8 +83,16 @@ def _mysql_get_pic_string_by_user_id(user_id: str) -> Optional[str]:
                 return row[0] if isinstance(row, (tuple, list)) else None
         finally:
             conn.close()
-    except Exception:
-        raise HTTPException(status_code=500, detail="db_check_failed")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={
+            "error": "db_check_failed",
+            "host": host,
+            "port": port,
+            "user": user,
+            "db": db,
+            "table": table,
+            "reason": str(e),
+        })
 
 
 class TPMModel(BaseModel):
@@ -223,11 +238,13 @@ def issue_phc_secure(payload: SecureInbound) -> Dict[str, Any]:
     pic_db = _mysql_get_pic_string_by_user_id(user_id)
     if not pic_db:
         raise HTTPException(status_code=403, detail="face_record_not_found")
+    t_face0 = time.perf_counter()
     pic_str_in = str((bi or {}).get("pic_string") or "")
     if pic_str_in and pic_str_in != pic_db:
         raise HTTPException(status_code=403, detail="face_verification_failed")
     bi = (bi or {})
     bi["pic_string"] = pic_db
+    face_check_ms = (time.perf_counter() - t_face0) * 1000.0
 
     rf = paillier_encrypt(TP_PAILLIER.public, int(hashlib.sha256(str(idv).encode()).hexdigest(), 16))
     crf = crf_encrypt(TP_DL_PK, rf, rb)
@@ -266,7 +283,7 @@ def issue_phc_secure(payload: SecureInbound) -> Dict[str, Any]:
         _tpdb_put(hid, {"cid": cid, "cid_enc": phc.get("CID_enc"), "rf": str(rf), "r_bind": str(rb), "phc": phc})
     except Exception:
         pass
-    return {"success": True, "phc": phc, "mode": "secure_phc_jsonld", "face_verified": True}
+    return {"success": True, "phc": phc, "mode": "secure_phc_jsonld", "face_verified": True, "face_check_ms": face_check_ms}
 
 
 @router.post("/tp/verify_phc")

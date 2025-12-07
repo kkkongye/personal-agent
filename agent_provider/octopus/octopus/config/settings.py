@@ -6,11 +6,12 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
+import os
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
 
-# Load environment variables from .env file
-load_dotenv()
+# Load environment variables, allowing explicit path override via DOTENV_PATH
+load_dotenv(os.getenv("DOTENV_PATH") or ".env")
 
 # ANP Default constants
 DEFAULT_CHUNK_SIZE = 64 * 1024  # 64KB

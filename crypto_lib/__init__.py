@@ -220,6 +220,66 @@ def hcgen_cmi(cmc: Any, hid: str) -> int:
     payload = canonical_json({"cmc": cmc, "hid": hid}).encode()
     return hash_to_int(payload) % DL_Q
 
+def dir_code_cmi(root_dir: str) -> int:
+    try:
+        import os
+        files: list[tuple[str, str]] = []
+        for base, dirs, fnames in os.walk(root_dir):
+            # prune heavy/irrelevant directories
+            dirs[:] = [d for d in dirs if d not in {".venv", "__pycache__", "logs"}]
+            for fn in fnames:
+                # skip compiled and binary large artifacts
+                if fn.endswith(('.pyc', '.pyo', '.so', '.dll')):
+                    continue
+                full = os.path.join(base, fn)
+                try:
+                    with open(full, 'rb') as f:
+                        data = f.read()
+                    h = sha256_hex(data.hex())
+                    rel = os.path.relpath(full, root_dir).replace('\\', '/')
+                    files.append((rel, h))
+                except Exception:
+                    continue
+        files.sort(key=lambda x: x[0])
+        prev = sha256_hex('seed')
+        for rel, h in files:
+            prev = sha256_hex(prev + canonical_json({"path": rel, "hash": h}))
+        return int(prev, 16) % DL_Q
+    except Exception:
+        return 0
+
+def dir_code_cmi_hid(root_dir: str, hid: str) -> int:
+    try:
+        import os
+        # normalize HID: prefer hex-64, else sha256(id)
+        try:
+            is_hex = (len(hid) == 64 and all(c in "0123456789abcdefABCDEF" for c in hid))
+            hid_use = hid if is_hex else sha256_hex(str(hid))
+        except Exception:
+            hid_use = sha256_hex(str(hid))
+        files: list[tuple[str, str]] = []
+        for base, dirs, fnames in os.walk(root_dir):
+            dirs[:] = [d for d in dirs if d not in {".venv", "__pycache__", "logs"}]
+            for fn in fnames:
+                if fn.endswith(('.pyc', '.pyo', '.so', '.dll')):
+                    continue
+                full = os.path.join(base, fn)
+                try:
+                    with open(full, 'rb') as f:
+                        data = f.read()
+                    h = sha256_hex(data.hex())
+                    rel = os.path.relpath(full, root_dir).replace('\\', '/')
+                    files.append((rel, h))
+                except Exception:
+                    continue
+        files.sort(key=lambda x: x[0])
+        prev = sha256_hex(str(hid_use))
+        for rel, h in files:
+            prev = sha256_hex(prev + canonical_json({"path": rel, "hash": h}))
+        return int(prev, 16) % DL_Q
+    except Exception:
+        return 0
+
 def ch_compute(ap_pk: int, apm: Dict[str, Any], apa: Dict[str, Any], r_ap: int) -> int:
     payload = canonical_json({"APM": apm, "APA": apa}).encode()
     h = hash_to_int(payload) % DL_Q
