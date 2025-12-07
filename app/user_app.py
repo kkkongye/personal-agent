@@ -457,7 +457,17 @@ def user_create_agent(req: RequestCreateAgent) -> Dict[str, Any]:
         }
         root = os.path.join(os.getcwd(), "local_store", "agents", phc_id)
         os.makedirs(root, exist_ok=True)
-        path = os.path.join(root, f"agent_manifest_{int(time.time())}.json")
+        # keep a single manifest file; remove old timestamped manifests
+        try:
+            import glob
+            for old in glob.glob(os.path.join(root, "agent_manifest_*.json")):
+                try:
+                    os.remove(old)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        path = os.path.join(root, "agent_manifest.json")
         with open(path, "w", encoding="utf-8") as f:
             json.dump(manifest, f, ensure_ascii=False, indent=2)
         features = manifest.get("modules", {}).get("features", [])
