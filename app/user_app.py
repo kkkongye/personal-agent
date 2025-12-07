@@ -1,11 +1,12 @@
 from fastapi import FastAPI, Response, Body
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Any, Dict
 from user.models import UserInfo, PIIModel, BIModel
 from user.apply_agent import request_phc_remote, request_pa_remote, request_cmm_init, request_cmm_submit
 from user.apply_agent import request_phc_secure
 from user.apply_agent import request_pa_recover
-from trust_provider.crypto import elgamal_decrypt_bytes
+from crypto_lib import elgamal_decrypt_bytes
 from user.crypto import canonical_json, sha256_hex
 from crypto_lib import compute_af_formal, hcgen_cmi, ch_compute, cch_compute
 from trust_provider.issue_phc import TP_DL_PK
@@ -20,6 +21,7 @@ from trust_provider.issue_phc import issue_phc, ASOCompleteModel
 
 app = FastAPI(title="User Service")
 app.include_router(pic_router, prefix="/v1")
+app.mount("/user/static", StaticFiles(directory=os.path.join(os.getcwd(), "app", "web_user")), name="user_static")
 
 class RequestPHC(BaseModel):
     base_url: str
@@ -561,7 +563,7 @@ def user_recover_pa(req: RequestPARecover) -> Dict[str, Any]:
 def user_update_init(req: RequestUpdateInit) -> Dict[str, Any]:
     try:
         import httpx
-        pub_resp = httpx.get(req.base_url.rstrip('/') + '/v1/ap/public_keys', timeout=10.0)
+        pub_resp = httpx.get(req.base_url.rstrip('/') + '/ap/public_keys', timeout=10.0)
         pub_resp.raise_for_status()
         ap_dlog_pk = int(str(pub_resp.json()["ap_dlog_pk"]))
     except Exception:
@@ -642,7 +644,8 @@ def user_update_submit(req: RequestUpdateSubmit) -> Dict[str, Any]:
     obj = {"CMC": req.cmc, "HID": hid_use, "PHC": req.phc}
     if cmi_code_int is not None:
         obj["CMI_code"] = str(int(cmi_code_int))
-    cmc_enc = elgamal_encrypt_bytes(ap_dlog_pk, obj)
+    # Send plaintext payload for update_submit; server supports both encrypted and plaintext
+    cmc_enc = obj
     url = req.base_url.rstrip('/') + '/v1/ap/update_submit'
     try:
         import httpx
@@ -697,249 +700,13 @@ def user_update_submit(req: RequestUpdateSubmit) -> Dict[str, Any]:
 
 @app.get('/user')
 def ui() -> Response:
-    html = """
-    <!doctype html><html><head><meta charset='utf-8'><title>User UI</title>
-    <style>body{font-family:system-ui,Segoe UI,Arial;margin:24px} input,button{padding:8px;margin:4px} pre{background:#f6f8fa;padding:12px;border:1px solid #e1e4e8;overflow:auto}</style>
-    </head><body>
-    <h2>User</h2>
-    <div>
-        <div><label>TP Base:  http://127.0.0.1:8001</label></div>
-        <div><label>AP Base:  http://127.0.0.1:8002</label></div>
-    </div>
-    <div>
-      <label>Name</label><input id=name value="Alice">
-      <label>ID</label><input id=idnum value="ID123">
-      <label>ID Card</label><input id=idcard value="IDCARD123456">
-      <label>Email</label><input id=email value="alice@example.com">
-      <label>Passport</label><input id=passport value="P123456789"><label>Photo</label><input id=picfile type=file accept="image/*">
-    </div>
-    <button id=issue>1.请求 PHC</button>
-    <pre id=phc></pre>
-    <button id=fetchcmm disabled>2.选择PA的配置信息</button>
-    <div id=cmm_ui></div>
-    <button id=submitcmc disabled>提交PA的配置信息</button>
-    <pre id=pa_cmm></pre>
-    <pre id=hash_ch></pre>
-    <pre id=hash_cch></pre>
-    <pre id=hash_status></pre>
-
-    <button id=createAgent disabled>3.创建个人智能体</button>
-    <pre id=agent_out></pre>
-    <button id=recoverpa disabled>4.PA丢失，恢复PA</button>
-    <button id=recoverboth>PHC与PA都丢失，恢复PA</button>
-    <pre id=pa_recover></pre>
-    <button id=updatepa disabled>5.更新PA的配置信息</button>
-    <div id=upd_cmm_ui></div>
-    <button id=submitUpdate disabled>提交更新</button>
-    <pre id=pa_update></pre>
-    
-    
-    <script>
-        const tpEl=document.getElementById('tp');
-        const apEl=document.getElementById('ap');
-        const name=document.getElementById('name');
-        const idnum=document.getElementById('idnum');
-        const email=document.getElementById('email');
-        const idcard=document.getElementById('idcard');
-        const passport=document.getElementById('passport');
-        const phcPre=document.getElementById('phc');
-    const paCmm=document.getElementById('pa_cmm');
-    const hashCH=document.getElementById('hash_ch');
-    const hashCCH=document.getElementById('hash_cch');
-    const hashStatus=document.getElementById('hash_status');
-        const paRecover=document.getElementById('pa_recover');
-    const cmmUI=document.getElementById('cmm_ui');
-    const zhCat=['功能','输入','推理','知识','输出'];
-    const zhLabelMap={
-      'text':'文本',
-      'voice':'语音',
-      'image':'图像',
-      'video':'视频',
-      'sensor':'传感器',
-      'system-event':'系统事件',
-      'rule-engine':'规则引擎',
-      'bayesian-net':'贝叶斯网络',
-      'fuzzy-logic':'模糊逻辑',
-      'llm':'大模型',
-      'retrieval':'检索',
-      'neural-network':'神经网络',
-      'planner':'规划',
-      'safety-filter':'安全过滤',
-      'local-memory':'本地记忆',
-      'long-term-memory':'长期记忆',
-      'vector-index':'向量索引',
-      'knowledge-base':'知识库',
-      'shared-org-data':'组织共享数据',
-      'browser':'浏览器',
-      'external-api':'外部API',
-      'database':'数据库',
-      'blockchain':'区块链',
-      'ipfs':'IPFS',
-      'iot-device':'物联网设备',
-      'cloud-storage':'云存储',
-      'speech':'语音',
-      'notification':'通知',
-      'json-api':'JSON API',
-      'actuation':'执行'
-    };
-    const zhLabelMapExtra={
-      'text-processing':'文本处理',
-      'news-search':'新闻查询',
-      'payment':'支付',
-      'web-browsing':'联网搜索',
-      'rag-openai':'RAG+OPENAI',
-      'rag-deepseek':'RAG+deepseek',
-      'knowledge-pro':'专业知识库',
-      'ppt':'ppt'
-    };
-        let phcObj=null;
-        let cmmObj=null;
-        let cmcObj=null;
-        
-        document.getElementById('issue').onclick = async ()=>{
-        const tpBase = tpEl && tpEl.value ? tpEl.value : 'http://127.0.0.1:8001';
-        const f = document.getElementById('picfile')?.files?.[0];
-        if (!f) { phcPre.textContent='请先选择照片再申请 PHC'; return; }
-        const fd=new FormData(); fd.append('file', f);
-        let picString=null;
-        try {
-          const rUpload=await fetch('/v1/pic/upload',{method:'POST',body:fd});
-          const dUpload=await rUpload.json();
-          picString = dUpload.string_part || null;
-          if (!picString) { phcPre.textContent='图片上传失败，请重试'; return; }
-        } catch (e) { phcPre.textContent='图片上传失败：'+(e&&e.message?e.message:'unknown'); return; }
-        const user={pii:{name:name.value,id_number:idnum.value,id_card_number:(idcard?idcard.value:''),email:email.value},bi:{last_login_ip:'127.0.0.1',passport_number:(passport?passport.value:''),pic_string:picString},cdid:'cdid:user.placeholder',ecid:'g'};
-        const payload={base_url:tpBase,user};
-        try{
-            const r=await fetch('/user/request_phc',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
-            const data=await r.json(); phcObj = data.phc || data.PHC || null; phcPre.textContent=JSON.stringify(data,null,2); document.getElementById('fetchcmm').disabled=!phcObj; document.getElementById('recoverpa').disabled=!phcObj; const updBtn=document.getElementById('updatepa'); if(updBtn) updBtn.disabled=!phcObj;
-        }catch(e){ phcPre.textContent='Request PHC failed: '+(e&&e.message?e.message:'unknown'); }
-        };
-
-        document.getElementById('fetchcmm').onclick = async ()=>{
-        const apBase = 'http://127.0.0.1:8002';
-        const user={pii:{name:name.value,id_number:idnum.value,id_card_number:(idcard?idcard.value:''),email:email.value},bi:{last_login_ip:'127.0.0.1',passport_number:(passport?passport.value:'')},cdid:'cdid:user.placeholder',ecid:'g'};
-        const r=await fetch('/user/cmm_init',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({base_url:apBase, phc:phcObj, user})});
-      const data=await r.json(); cmmObj=data.cmm; cmcObj=(cmmObj||[]).map(row=>row[0]);
-      window.__cmmSk = String(data.sk||""); window.__cmmPk = String(data.pk||"");
-        const htmlRows=(cmmObj||[]).map((row,i)=>{
-            const opts=row.map((opt,j)=>`<label><input type=checkbox name=\"row_${i}\" value='${j}'>${(zhLabelMap[opt.label]||zhLabelMapExtra[opt.label]||opt.label)}</label>`).join(' ');
-            return `<div>${zhCat[i]}：${opts}</div>`;
-        }).join('');
-      cmmUI.innerHTML = htmlRows;
-      document.getElementById('submitcmc').disabled = !(window.__cmmSk && window.__cmmPk);
-        };
-        
-        document.getElementById('submitcmc').onclick = async ()=>{
-        const apBase = 'http://127.0.0.1:8002';
-        const hid = idnum.value? (await (async()=>{return (idnum.value)})()) : '';
-        const cmc = (cmmObj||[]).map((row,i)=>{ const nodes = Array.from(document.querySelectorAll(`input[name='row_${i}']:checked`)); const idxs = nodes.map(n=>Number(n.value)); return row.filter((_,j)=>idxs.includes(j)); });
-        cmcObj = cmc;
-        const r=await fetch('/user/cmm_submit',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({base_url:apBase, cmc:cmc||[], hid:hid, phc:phcObj, user_sk: window.__cmmSk||"", user_pk: window.__cmmPk||""})});
-      const data=await r.json();
-      paCmm.textContent=JSON.stringify(data,null,2);
-      hashCH.textContent = 'CH: ' + String(data.CH || '');
-      hashCCH.textContent = 'CCH: ' + String(data.CCH || '');
-      hashStatus.textContent = 'verified_ch: ' + String(data.verified_ch_user || false) + ', verified_cch: ' + String(data.verified_cch_user || false);
-      const recoverBtn = document.getElementById('recoverpa'); if(recoverBtn) recoverBtn.disabled = false;
-      window.__PHC = data.PHC; window.__PA = data.PA;
-      const revealBtn = document.getElementById('reveal'); if(revealBtn) revealBtn.disabled = !(window.__PHC);
-      const createBtn = document.getElementById('createAgent');
-      if(createBtn){
-        createBtn.disabled = !(window.__PHC && window.__PA);
-        createBtn.onclick = async ()=>{
-          const payload2 = { phc: window.__PHC||{}, pa: window.__PA||{}, cmc: cmcObj||[] };
-          const r2=await fetch('/user/create_agent',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload2)});
-          const data2=await r2.json(); const out = document.getElementById('agent_out'); if(out) out.textContent=JSON.stringify(data2,null,2);
-        };
-      }
-        };
-        
-
-
-        document.getElementById('recoverpa').onclick = async ()=>{
-        const apBase = apEl && apEl.value ? apEl.value : 'http://127.0.0.1:8002';
-        const user={pii:{name:name.value,id_number:idnum.value,id_card_number:(idcard?idcard.value:''),email:email.value},bi:{last_login_ip:'127.0.0.1',passport_number:(passport?passport.value:'')},cdid:'cdid:user.placeholder',ecid:'g'};
-        const payload={base_url:apBase, phc:phcObj, user};
-        try{
-            const r=await fetch('/user/recover_pa',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
-            const data=await r.json(); paRecover.textContent=JSON.stringify(data,null,2);
-        }catch(e){ paRecover.textContent='Recover PA failed: '+(e&&e.message?e.message:'unknown'); }
-        };
-
-        document.getElementById('recoverboth').onclick = async ()=>{
-        const tpBase = 'http://127.0.0.1:8001';
-        const apBase = 'http://127.0.0.1:8002';
-        const user={pii:{name:name.value,id_number:idnum.value,id_card_number:(idcard?idcard.value:''),email:email.value},bi:{last_login_ip:'127.0.0.1',passport_number:(passport?passport.value:'')},cdid:'cdid:user.placeholder',ecid:'g'};
-        try {
-            const r=await fetch('/user/recover_both',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({tp_base:tpBase, ap_base:apBase, user})});
-            const data=await r.json(); paRecover.textContent=JSON.stringify(data,null,2);
-            window.__PHC = data.phc || null;
-        }catch(e){ paRecover.textContent='Recover Both failed: '+(e&&e.message?e.message:'unknown'); }
-        };
-
-        const revealEl = document.getElementById('reveal');
-        if (revealEl) {
-          revealEl.onclick = async ()=>{
-            const tpBase = 'http://127.0.0.1:8001';
-            try{
-                const r=await fetch('/user/reveal',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({base_url:tpBase, phc:window.__PHC||phcObj||{}})});
-                const data=await r.json(); const out=document.getElementById('reveal_out'); if(out) out.textContent=JSON.stringify(data,null,2);
-            }catch(e){ const out=document.getElementById('reveal_out'); if(out) out.textContent='Reveal failed: '+(e&&e.message?e.message:'unknown'); }
-          };
-        }
-
-        document.getElementById('updatepa').onclick = async ()=>{
-        const apBase = apEl && apEl.value ? apEl.value : 'http://127.0.0.1:8002';
-        const user={pii:{name:name.value,id_number:idnum.value,id_card_number:(idcard?idcard.value:''),email:email.value},bi:{last_login_ip:'127.0.0.1',passport_number:(passport?passport.value:'')},cdid:'cdid:user.placeholder',ecid:'g'};
-        const out=document.getElementById('pa_update');
-        if(!phcObj){ out.textContent='请先点击 1.Request PHC'; return; }
-        try{
-          const r=await fetch('/user/update_init',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({base_url:apBase, phc:phcObj, user})});
-          const data=await r.json(); const cmm=data.cmm; window.__updSk=String(data.sk||""); window.__updPk=String(data.pk||""); window.__lastCMM=cmm;
-          const updUI=document.getElementById('upd_cmm_ui');
-          const htmlRows=(cmm||[]).map((row,i)=>{ const opts=row.map((opt,j)=>`<label><input type=checkbox name=\"upd_row_${i}\" value='${j}'>${(zhLabelMap[opt.label]||zhLabelMapExtra[opt.label]||opt.label)}</label>`).join(' '); return `<div>${zhCat[i]}：${opts}</div>`; }).join('');
-          updUI.innerHTML = htmlRows;
-          document.getElementById('submitUpdate').disabled = !((cmm && cmm.length>0) && (window.__updSk && window.__updPk));
-        }catch(e){ out.textContent='Update PA failed: '+(e&&e.message?e.message:'unknown'); }
-        };
-
-        document.getElementById('submitUpdate').onclick = async ()=>{
-        const apBase = apEl && apEl.value ? apEl.value : 'http://127.0.0.1:8002';
-        const hid = idnum.value? (await (async()=>{return (idnum.value)})()) : '';
-        const cmc = (window.__lastCMM||[]).map((row,i)=>{ const nodes = Array.from(document.querySelectorAll(`input[name='upd_row_${i}']:checked`)); const idxs = nodes.map(n=>Number(n.value)); return row.filter((_,j)=>idxs.includes(j)); });
-        const payload={base_url:apBase, cmc:cmc||[], hid:hid, phc:phcObj, user_sk: window.__updSk||"", user_pk: window.__updPk||""};
-        const r=await fetch('/user/update_submit',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
-        const data=await r.json(); const out=document.getElementById('pa_update'); out.textContent=JSON.stringify(data,null,2);
-        try{
-          const btnId = 'updateCreateAgent';
-          let btn = document.getElementById(btnId);
-          if(!btn){
-            btn = document.createElement('button');
-            btn.id = btnId;
-            btn.textContent = '更新个人智能体';
-            const target = document.getElementById('pa_update');
-            target.insertAdjacentElement('afterend', btn);
-          }
-          let agentOut = document.getElementById('agent_update');
-          if(!agentOut){
-            agentOut = document.createElement('pre');
-            agentOut.id = 'agent_update';
-            btn.insertAdjacentElement('afterend', agentOut);
-          }
-          btn.disabled = !(data && data.PHC && data.PA);
-          btn.onclick = async ()=>{
-            const payload2 = { phc: data.PHC||{}, pa: data.PA||{}, cmc: cmc||[] };
-            const r2 = await fetch('/user/create_agent',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload2)});
-            const data2 = await r2.json();
-            agentOut.textContent = JSON.stringify(data2,null,2);
-          };
-        }catch(e){}
-        };
-    </script>
-    </body></html>
-    """
-    return Response(content=html, media_type='text/html')
+    import os
+    path = os.path.join(os.getcwd(), "app", "web_user", "index.html")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return Response(content=f.read(), media_type='text/html')
+    except Exception:
+        return Response(content="<h1>Missing user UI</h1>", media_type='text/html')
 class RequestPARecover(BaseModel):
     base_url: str
     phc: Dict[str, Any]

@@ -51,7 +51,7 @@ def request_phc_secure(base_url: str, user: UserInfo) -> PHCResponse:
 
 def request_pa_remote(base_url: str, phc: Dict[str, Any], user: UserInfo) -> Dict[str, Any]:
     try:
-        pub_resp = httpx.get(base_url.rstrip("/") + "/v1/ap/public_keys", timeout=10.0)
+        pub_resp = httpx.get(base_url.rstrip("/") + "/ap/public_keys", timeout=10.0)
         pub_resp.raise_for_status()
         ap_keys = pub_resp.json()
         ap_dlog_pk = int(str(ap_keys["ap_dlog_pk"]))
@@ -189,7 +189,10 @@ def request_cmm_submit(base_url: str, cmc: list, hid: str, phc: Dict[str, Any], 
             obj["CMI_code"] = str(int(cmi_code))
         except Exception:
             obj["CMI_code"] = str(cmi_code)
-    cmc_enc = elgamal_encrypt_bytes(ap_dlog_pk, obj)
+    # Use crypto_lib ElGamal with raw JSON bytes for compatibility
+    from crypto_lib import elgamal_encrypt_bytes as ap_elg_enc
+    raw = json.dumps(obj, separators=(",", ":")).encode()
+    cmc_enc = ap_elg_enc(ap_dlog_pk, raw)
     url = base_url.rstrip("/") + "/v1/ap/cmm_submit"
     try:
         resp = httpx.post(url, json={"cmc_enc": cmc_enc, "user_pub": user_pub}, timeout=15.0)

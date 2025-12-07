@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>User UI</title>
+  <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "vue": "https://unpkg.com/vue@3/dist/vue.esm-browser.prod.js"
+      }
+    }
+  </script>
+  <style>
+    body{font-family:system-ui,Segoe UI,Arial;margin:24px;background:#f7f8fa}
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script type="module">
+    import * as Vue from 'https://unpkg.com/vue@3/dist/vue.esm-browser.prod.js';
+    import ElementPlus from 'https://unpkg.com/element-plus/dist/index.full.mjs';
+    import { loadModule } from 'https://unpkg.com/vue3-sfc-loader/dist/vue3-sfc-loader.esm.js';
+    const options = {
+      moduleCache: { vue: Vue },
+      getFile(url) { return fetch(url).then(r => r.ok ? r.text() : Promise.reject(r)); },
+      addStyle(textContent) { const style = document.createElement('style'); style.textContent = textContent; document.head.appendChild(style); }
+    };
+    const App = await loadModule('/user/static/UserApp.vue', options);
+    Vue.createApp(App).use(ElementPlus).mount('#app');
+  </script>
+</body>
+</html>
+
