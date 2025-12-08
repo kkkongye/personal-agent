@@ -506,21 +506,21 @@ def user_create_agent(req: RequestCreateAgent) -> Dict[str, Any]:
             import shutil
             personal_dir = os.path.join(root, "octopus_build")
             src_dir = os.path.join(os.getcwd(), "agent_provider", "octopus")
-            if os.path.exists(personal_dir):
-                shutil.rmtree(personal_dir, ignore_errors=True)
-            shutil.copytree(src_dir, personal_dir, dirs_exist_ok=False)
-            prune_map = {
-                "text_processor": os.path.join(personal_dir, "octopus", "agents", "text_processor_agent.py"),
-                "news": os.path.join(personal_dir, "octopus", "agents", "news_agent.py"),
-                "web_browsing": os.path.join(personal_dir, "octopus", "agents", "web_browsing_agent.py"),
-            }
-            keep = set(allowed_agents)
-            for name, fpath in prune_map.items():
-                if name not in keep and os.path.exists(fpath):
-                    try:
-                        os.remove(fpath)
-                    except Exception:
-                        pass
+            # Reuse the build generated during CMI computation to avoid duplicate I/O
+            if not os.path.exists(personal_dir):
+                shutil.copytree(src_dir, personal_dir, dirs_exist_ok=False)
+                prune_map = {
+                    "text_processor": os.path.join(personal_dir, "octopus", "agents", "text_processor_agent.py"),
+                    "news": os.path.join(personal_dir, "octopus", "agents", "news_agent.py"),
+                    "web_browsing": os.path.join(personal_dir, "octopus", "agents", "web_browsing_agent.py"),
+                }
+                keep = set(allowed_agents)
+                for name, fpath in prune_map.items():
+                    if name not in keep and os.path.exists(fpath):
+                        try:
+                            os.remove(fpath)
+                        except Exception:
+                            pass
             personal_bat = os.path.join(root, "launch_octopus_personal.bat")
             with open(personal_bat, "w", encoding="utf-8") as pbf:
                 pbf.write("@echo off\n")
