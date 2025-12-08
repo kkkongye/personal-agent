@@ -348,6 +348,12 @@ def _build_cmm_matrix(hid: str, phc: Dict[str, Any]) -> List[List[Dict[str, Any]
             {"id": "output_video", "label": "video", "params": {}},
             {"id": "output_ppt", "label": "ppt", "params": {}},
         ],
+        [
+            {"id": "appearance_purple", "label": "appearance-purple", "params": {}},
+            {"id": "appearance_blue", "label": "appearance-blue", "params": {}},
+            {"id": "appearance_pink", "label": "appearance-pink", "params": {}},
+            {"id": "appearance_green", "label": "appearance-green", "params": {}},
+        ],
     ]
 
 def _apdb_root() -> str:

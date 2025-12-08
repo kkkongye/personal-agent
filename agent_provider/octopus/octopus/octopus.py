@@ -309,16 +309,29 @@ async def get_info():
 
 @app.get("/v1/ui-config")
 async def get_ui_config():
-    import os
+    import os, json
     val = str(os.environ.get("INPUTS_INCLUDE_IMAGE", "")).lower().strip()
     if val in ("0", "false", "no"):
         allow_image = False
     else:
-        # 默认允许，只有明确关闭时才隐藏
         allow_image = True
     sval = str(os.environ.get("OUTPUTS_INCLUDE_SPEECH", "")).lower().strip()
     allow_speech = sval in ("1", "true", "yes")
-    return {"allow_image_input": allow_image, "allow_speech_output": allow_speech}
+    theme = os.environ.get("OCTOPUS_THEME", "")
+    if not theme:
+        try:
+            apath = os.environ.get("OCTOPUS_ALLOWED_AGENTS_PATH", "")
+            if apath and os.path.exists(apath):
+                with open(apath, "r", encoding="utf-8") as f:
+                    obj = json.load(f)
+                    t = str(obj.get("theme") or "").strip().lower()
+                    if t:
+                        theme = t
+        except Exception:
+            theme = ""
+    if theme not in {"purple", "blue", "pink", "green"}:
+        theme = "purple"
+    return {"allow_image_input": allow_image, "allow_speech_output": allow_speech, "theme": theme}
 
 
 @app.get("/anp/status")

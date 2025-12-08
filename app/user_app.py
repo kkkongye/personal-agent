@@ -476,9 +476,23 @@ def user_create_agent(req: RequestCreateAgent) -> Dict[str, Any]:
         mapping = {"text-processing": "text_processor", "news-search": "news", "web-browsing": "web_browsing"}
         allowed_agents = [mapping.get(x, "") for x in features]
         allowed_agents = [x for x in allowed_agents if x]
+        theme = "purple"
+        try:
+            appearance = [str((m.get("label") if isinstance(m, dict) else m) or "") for m in (cmc[5] if len(cmc)>5 else [])]
+            sel = (appearance[0] if appearance else "").lower().strip().replace(" ", "").replace("_", "-")
+            if "blue" in sel:
+                theme = "blue"
+            elif "pink" in sel:
+                theme = "pink"
+            elif "green" in sel:
+                theme = "green"
+            elif "purple" in sel:
+                theme = "purple"
+        except Exception:
+            theme = "purple"
         active_path = os.path.join(root, "active_agents.json")
         with open(active_path, "w", encoding="utf-8") as f2:
-            json.dump({"allowed_agents": allowed_agents}, f2, ensure_ascii=False, indent=2)
+            json.dump({"allowed_agents": allowed_agents, "theme": theme}, f2, ensure_ascii=False, indent=2)
         bat_path = None
         reason = manifest.get("modules", {}).get("reasoning", [])
         labels = [str(m or "") for m in reason]
@@ -506,21 +520,24 @@ def user_create_agent(req: RequestCreateAgent) -> Dict[str, Any]:
             import shutil
             personal_dir = os.path.join(root, "octopus_build")
             src_dir = os.path.join(os.getcwd(), "agent_provider", "octopus")
-            # Reuse the build generated during CMI computation to avoid duplicate I/O
-            if not os.path.exists(personal_dir):
-                shutil.copytree(src_dir, personal_dir, dirs_exist_ok=False)
-                prune_map = {
-                    "text_processor": os.path.join(personal_dir, "octopus", "agents", "text_processor_agent.py"),
-                    "news": os.path.join(personal_dir, "octopus", "agents", "news_agent.py"),
-                    "web_browsing": os.path.join(personal_dir, "octopus", "agents", "web_browsing_agent.py"),
-                }
-                keep = set(allowed_agents)
-                for name, fpath in prune_map.items():
-                    if name not in keep and os.path.exists(fpath):
-                        try:
-                            os.remove(fpath)
-                        except Exception:
-                            pass
+            if os.path.exists(personal_dir):
+                try:
+                    shutil.rmtree(personal_dir, ignore_errors=True)
+                except Exception:
+                    pass
+            shutil.copytree(src_dir, personal_dir, dirs_exist_ok=False)
+            prune_map = {
+                "text_processor": os.path.join(personal_dir, "octopus", "agents", "text_processor_agent.py"),
+                "news": os.path.join(personal_dir, "octopus", "agents", "news_agent.py"),
+                "web_browsing": os.path.join(personal_dir, "octopus", "agents", "web_browsing_agent.py"),
+            }
+            keep = set(allowed_agents)
+            for name, fpath in prune_map.items():
+                if name not in keep and os.path.exists(fpath):
+                    try:
+                        os.remove(fpath)
+                    except Exception:
+                        pass
             personal_bat = os.path.join(root, "launch_octopus_personal.bat")
             with open(personal_bat, "w", encoding="utf-8") as pbf:
                 pbf.write("@echo off\n")
@@ -539,6 +556,9 @@ def user_create_agent(req: RequestCreateAgent) -> Dict[str, Any]:
                 pbf.write("set DOTENV_PATH=%REPO_DIR%\\agent_provider\\octopus\\.env\n")
                 pbf.write(f"set INPUTS_INCLUDE_IMAGE={'true' if allow_img else 'false'}\n")
                 pbf.write(f"set OUTPUTS_INCLUDE_SPEECH={'true' if allow_speech else 'false'}\n")
+                pbf.write(f"set OCTOPUS_THEME={theme}\n")
+                pbf.write("echo Checking Octopus dependencies...\n")
+                pbf.write("%PYEXE% -m pip install -q openai python-dotenv httpx pydantic pydantic-settings fastapi uvicorn\n")
                 pbf.write("set PYTHONPATH=%PERSONAL_DIR%\n")
                 pbf.write("cd /d \"%PERSONAL_DIR%\"\n")
                 pbf.write("%PYEXE% -m octopus.octopus --port 9527\n")

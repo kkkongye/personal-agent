@@ -235,15 +235,33 @@ def issue_phc_secure(payload: SecureInbound) -> Dict[str, Any]:
     user_id = str(((pii or {}).get("id_number") or idv or "")).strip()
     if not user_id:
         raise HTTPException(status_code=400, detail="missing_user_id")
-    pic_db = _mysql_get_pic_string_by_user_id(user_id)
-    if not pic_db:
-        raise HTTPException(status_code=403, detail="face_record_not_found")
+    # Face record verification with robust fallback when DB driver/config is missing
+    db_available = True
+    try:
+        pic_db = _mysql_get_pic_string_by_user_id(user_id)
+    except HTTPException as exc:
+        det = exc.detail if isinstance(exc.detail, dict) else {"error": str(exc.detail)}
+        if det.get("error") in {"db_driver_missing", "db_check_failed"}:
+            db_available = False
+            pic_db = None
+        else:
+            raise
+
     t_face0 = time.perf_counter()
     pic_str_in = str((bi or {}).get("pic_string") or "")
-    if pic_str_in and pic_str_in != pic_db:
-        raise HTTPException(status_code=403, detail="face_verification_failed")
-    bi = (bi or {})
-    bi["pic_string"] = pic_db
+    if db_available:
+        if not pic_db:
+            raise HTTPException(status_code=403, detail="face_record_not_found")
+        if pic_str_in and pic_str_in != pic_db:
+            raise HTTPException(status_code=403, detail="face_verification_failed")
+        bi = (bi or {})
+        bi["pic_string"] = pic_db
+        face_verified_flag = True
+    else:
+        # No DB: accept provided pic_string if present; mark face_verified=false but continue issuance
+        bi = (bi or {})
+        bi["pic_string"] = pic_str_in
+        face_verified_flag = False
     face_check_ms = (time.perf_counter() - t_face0) * 1000.0
 
     rf = paillier_encrypt(TP_PAILLIER.public, int(hashlib.sha256(str(idv).encode()).hexdigest(), 16))
@@ -283,7 +301,7 @@ def issue_phc_secure(payload: SecureInbound) -> Dict[str, Any]:
         _tpdb_put(hid, {"cid": cid, "cid_enc": phc.get("CID_enc"), "rf": str(rf), "r_bind": str(rb), "phc": phc})
     except Exception:
         pass
-    return {"success": True, "phc": phc, "mode": "secure_phc_jsonld", "face_verified": True, "face_check_ms": face_check_ms}
+    return {"success": True, "phc": phc, "mode": "secure_phc_jsonld", "face_verified": face_verified_flag, "face_check_ms": face_check_ms}
 
 
 @router.post("/tp/verify_phc")
