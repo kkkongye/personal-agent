@@ -11,3 +11,4 @@ agent_provider/octopus/web/tts/*
 !agent_provider/octopus/web/tts/.gitkeep
 local_store/ap_db/*
 local_store/tp_db/*
+.venv/

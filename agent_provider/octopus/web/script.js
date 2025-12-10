@@ -136,6 +136,8 @@ class OctopusChat {
             const cfg = await r2.json();
             const allowImage = !!(cfg && cfg.allow_image_input);
             this.allowSpeech = !!(cfg && cfg.allow_speech_output);
+            const theme = (cfg && cfg.theme) ? String(cfg.theme) : 'purple';
+            this.applyTheme(theme);
             if (!allowImage) {
                 if (this.elements.addImageButton) this.elements.addImageButton.style.display = 'none';
                 if (this.elements.imageInput) this.elements.imageInput.disabled = true;
@@ -143,6 +145,32 @@ class OctopusChat {
                 if (this.elements.imageFileName) this.elements.imageFileName.textContent = '';
             }
         } catch (e) {}
+    }
+
+    applyTheme(theme) {
+        const headerMap = {
+            'purple': ['#6a11cb', '#a4508b'],
+            'blue': ['#4facfe', '#00f2fe'],
+            'pink': ['#ff758c', '#ff7eb3'],
+            'green': ['#34d399', '#059669']
+        };
+        const bodyMap = {
+            'purple': ['#e9d5ff', '#d8b4fe'],
+            'blue': ['#bfdbfe', '#93c5fd'],
+            'pink': ['#ffd1dc', '#ff9bb3'],
+            'green': ['#bbf7d0', '#86efac']
+        };
+        const headerPair = headerMap[theme] || headerMap['purple'];
+        const bodyPair = bodyMap[theme] || bodyMap['purple'];
+        document.documentElement.style.setProperty('--accent-start', headerPair[0]);
+        document.documentElement.style.setProperty('--accent-end', headerPair[1]);
+        try {
+            const headerGrad = `linear-gradient(135deg, ${headerPair[0]} 0%, ${headerPair[1]} 100%)`;
+            const bodyGrad = `linear-gradient(135deg, ${bodyPair[0]} 0%, ${bodyPair[1]} 100%)`;
+            const header = document.querySelector('.header');
+            if (header) header.style.background = headerGrad;
+            document.body.style.background = bodyGrad;
+        } catch (_) {}
     }
 
     updateStatus(text, type) {
@@ -479,6 +507,21 @@ class OctopusChat {
         }, 3000);
     }
 }
+
+// Ensure theme is applied on initial load even before class initialization completes
+try {
+  fetch('/v1/ui-config').then(r=>r.json()).then(cfg=>{
+    const map = {
+      'purple': ['#6a11cb', '#a4508b'],
+      'blue': ['#4facfe', '#00f2fe'],
+      'pink': ['#ff758c', '#ff7eb3'],
+      'green': ['#34d399', '#059669']
+    };
+    const pair = map[(cfg && cfg.theme) ? String(cfg.theme) : 'purple'] || map['purple'];
+    document.documentElement.style.setProperty('--accent-start', pair[0]);
+    document.documentElement.style.setProperty('--accent-end', pair[1]);
+  }).catch(()=>{});
+} catch (_) {}
 
 // Initialize the chat when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
