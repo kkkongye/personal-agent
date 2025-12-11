@@ -307,7 +307,7 @@ def user_cmm_submit(req: RequestCMMSubmit) -> Dict[str, Any]:
         src_dir = os.path.join(os.getcwd(), "agent_provider", "octopus")
         if os.path.exists(personal_dir):
             shutil.rmtree(personal_dir, ignore_errors=True)
-        shutil.copytree(src_dir, personal_dir, dirs_exist_ok=False)
+        shutil.copytree(src_dir, personal_dir, dirs_exist_ok=False, ignore=shutil.ignore_patterns(".venv", "venv", "__pycache__", ".git", ".idea", ".vscode"))
         prune_map = {
             "text_processor": os.path.join(personal_dir, "octopus", "agents", "text_processor_agent.py"),
             "news": os.path.join(personal_dir, "octopus", "agents", "news_agent.py"),
