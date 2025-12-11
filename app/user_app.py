@@ -712,6 +712,112 @@ def user_update_submit(req: RequestUpdateSubmit) -> Dict[str, Any]:
         verified_af = (str(af_prev) == str(af_calc_user))
         obj2["verified_cmi"] = verified_cmi
         obj2["verified_af_user"] = verified_af
+
+        # Update local agent configuration files (manifest, active_agents, launcher)
+        try:
+            import os, json
+            phc_id = (req.phc.get("id") or "phc").replace(":", "_")
+            root = os.path.join(os.getcwd(), "local_store", "agents", phc_id)
+            os.makedirs(root, exist_ok=True)
+
+            cmc = req.cmc or []
+            phc_new = obj2.get("PHC") or req.phc or {}
+            pa_new = obj2.get("PA") or {}
+
+            # 1. Update active_agents.json
+            features = [m.get("label") for m in (cmc[0] if len(cmc) > 0 else [])]
+            mapping = {"text-processing": "text_processor", "news-search": "news", "web-browsing": "web_browsing"}
+            allowed_agents = [mapping.get(x, "") for x in features]
+            allowed_agents = [x for x in allowed_agents if x]
+
+            theme = "purple"
+            try:
+                appearance = [str((m.get("label") if isinstance(m, dict) else m) or "") for m in (cmc[5] if len(cmc) > 5 else [])]
+                sel = (appearance[0] if appearance else "").lower().strip().replace(" ", "").replace("_", "-")
+                if "blue" in sel:
+                    theme = "blue"
+                elif "pink" in sel:
+                    theme = "pink"
+                elif "green" in sel:
+                    theme = "green"
+                elif "purple" in sel:
+                    theme = "purple"
+            except Exception:
+                theme = "purple"
+
+            active_path = os.path.join(root, "active_agents.json")
+            with open(active_path, "w", encoding="utf-8") as f2:
+                json.dump({"allowed_agents": allowed_agents, "theme": theme}, f2, ensure_ascii=False, indent=2)
+
+            # 2. Update agent_manifest.json
+            did = ((phc_new.get("ASO") or {}).get("TPM") or {}).get("CDID")
+            manifest = {
+                "id": phc_id,
+                "did": did,
+                "modules": {
+                    "features": [m.get("label") for m in (cmc[0] if len(cmc) > 0 else [])],
+                    "inputs": [m.get("label") for m in (cmc[1] if len(cmc) > 1 else [])],
+                    "reasoning": [m.get("label") for m in (cmc[2] if len(cmc) > 2 else [])],
+                    "knowledge": [m.get("label") for m in (cmc[3] if len(cmc) > 3 else [])],
+                    "outputs": [m.get("label") for m in (cmc[4] if len(cmc) > 4 else [])],
+                },
+                "binding": {
+                    "PHC_id": phc_new.get("id"),
+                    "SCID": phc_new.get("SCID"),
+                    "APid": ((pa_new.get("APA") or {}).get("APid")),
+                },
+                "proof": {
+                    "APA": (pa_new.get("APA") or {}).get("APproof"),
+                    "APCH": ((phc_new.get("PROOF") or {}).get("APCH")),
+                    "APCH_r": ((phc_new.get("PROOF") or {}).get("APCH_r")),
+                },
+            }
+            manifest_path = os.path.join(root, "agent_manifest.json")
+            with open(manifest_path, "w", encoding="utf-8") as f:
+                json.dump(manifest, f, ensure_ascii=False, indent=2)
+
+            # 3. Update launcher (launch_octopus_personal.bat)
+            inputs = manifest.get("modules", {}).get("inputs", [])
+            allow_img = ("image" in [str(x or "") for x in inputs])
+            outputs = manifest.get("modules", {}).get("outputs", [])
+            allow_speech = ("speech" in [str(x or "") for x in outputs])
+
+            personal_bat = os.path.join(root, "launch_octopus_personal.bat")
+            with open(personal_bat, "w", encoding="utf-8") as pbf:
+                pbf.write("@echo off\n")
+                pbf.write("setlocal enabledelayedexpansion\n")
+                pbf.write("set SCRIPT_DIR=%~dp0\n")
+                pbf.write("set REPO_DIR=%SCRIPT_DIR%..\\..\\..\n")
+                pbf.write(f"set PERSONAL_DIR=%REPO_DIR%\\local_store\\agents\\{phc_id}\\octopus_build\n")
+                pbf.write(f"set ALLOWED_PATH=%REPO_DIR%\\local_store\\agents\\{phc_id}\\active_agents.json\n")
+                pbf.write("pushd \"%REPO_DIR%\"\n")
+                pbf.write("set PYEXE=python\n")
+                pbf.write("set VENV_PY=%REPO_DIR%\\.venv\\Scripts\\python.exe\n")
+                pbf.write("if exist \"%VENV_PY%\" set PYEXE=\"%VENV_PY%\"\n")
+                pbf.write("set OCTOPUS_ALLOWED_AGENTS_PATH=%ALLOWED_PATH%\n")
+                pbf.write("set MODEL_PROVIDER=openai\n")
+                pbf.write("set ANP_SDK_ENABLED=false\n")
+                pbf.write("set DOTENV_PATH=%REPO_DIR%\\agent_provider\\octopus\\.env\n")
+                pbf.write(f"set INPUTS_INCLUDE_IMAGE={'true' if allow_img else 'false'}\n")
+                pbf.write(f"set OUTPUTS_INCLUDE_SPEECH={'true' if allow_speech else 'false'}\n")
+                pbf.write(f"set OCTOPUS_THEME={theme}\n")
+                pbf.write("echo Checking Octopus dependencies...\n")
+                pbf.write("%PYEXE% -m pip install -q openai python-dotenv httpx pydantic pydantic-settings fastapi uvicorn\n")
+                pbf.write("set PYTHONPATH=%PERSONAL_DIR%\n")
+                pbf.write("cd /d \"%PERSONAL_DIR%\"\n")
+                pbf.write("%PYEXE% -m octopus.octopus --port 9527\n")
+                pbf.write("if errorlevel 1 (echo Octopus failed to start. Press any key to view logs & pause)\n")
+                pbf.write("timeout /t 1 >nul\n")
+                pbf.write("start \"\" http://localhost:9527/\n")
+                pbf.write("popd\n")
+
+            # Update response with local config
+            obj2["manifest"] = manifest
+            obj2["allowed_agents"] = allowed_agents
+            obj2["theme"] = theme
+        except Exception as e:
+            print(f"Error updating local agent configuration: {e}")
+
         return obj2
     except Exception as e:
         return {"success": False, "error": str(e)}
