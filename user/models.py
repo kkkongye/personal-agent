@@ -35,3 +35,5 @@ class PHCResponse(BaseModel):
     mode: Optional[str] = None
     face_verified: Optional[bool] = None
     face_check_ms: Optional[float] = None
+    perf_tp_verify_user_ms: Optional[float] = None
+    perf_tp_issue_ms: Optional[float] = None

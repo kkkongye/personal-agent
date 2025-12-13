@@ -1,6 +1,18 @@
-from typing import Tuple
-from . import generate_paillier_keypair, dl_generate_keypair
+from typing import Tuple, Any, Dict
+from . import generate_paillier_keypair, dl_generate_keypair, PaillierKeypair
+import os
 
-TP_PAILLIER = generate_paillier_keypair()
-TP_DL_SK, TP_DL_PK = dl_generate_keypair()
-AP_SK, AP_PK = dl_generate_keypair()
+if os.environ.get("USE_FIXED_KEYS") == "1":
+    # Fixed keys for distributed testing
+    TP_PAILLIER = PaillierKeypair(
+        public={'n': 56523481207415478582601621883251972504178848750585309663066051614360330545071, 'g': 56523481207415478582601621883251972504178848750585309663066051614360330545072},
+        private={'lambda': 28261740603707739291300810941625986251842829159803471305554328752237623550856, 'mu': 25531380970357325881581728498764970892158352665451668318359727162749840586882, 'n': 56523481207415478582601621883251972504178848750585309663066051614360330545071}
+    )
+    TP_DL_SK = 7952322762944659566986437581342150144
+    TP_DL_PK = 53415020955687374347738330843236438600
+    AP_SK = 41906745610662414914335849415885965077
+    AP_PK = 147721913946991182921607010998447343842
+else:
+    TP_PAILLIER = generate_paillier_keypair()
+    TP_DL_SK, TP_DL_PK = dl_generate_keypair()
+    AP_SK, AP_PK = dl_generate_keypair()

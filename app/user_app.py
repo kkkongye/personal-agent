@@ -82,9 +82,24 @@ class BenchRequest(BaseModel):
 
 @app.post('/user/request_phc')
 def user_request_phc(req: RequestPHC) -> Dict[str, Any]:
+    from crypto_lib import schnorr_verify
     try:
         res = request_phc_secure(req.base_url, req.user)
-        return res.model_dump()
+        import time
+        t0 = time.perf_counter()
+        try:
+             phc = res.phc
+             tpa = phc.get('TPA') or {}
+             tpm = (phc.get('ASO') or {}).get('TPM') or {}
+             sig = tpa.get('TPproof') or {}
+             tpid = tpa.get('TPid')
+             _ = bool(schnorr_verify(int(str(tpid)), canonical_json({'TPM': tpm, 'TPid': tpid}).encode(), {'r': int(str(sig.get('r') or 0)), 'e': int(str(sig.get('e') or 0)), 's': int(str(sig.get('s') or 0))}))
+        except Exception:
+             pass
+        t1 = time.perf_counter()
+        out = res.model_dump()
+        out["perf_user_verify_phc_ms"] = (t1 - t0) * 1000.0
+        return out
     except httpx.HTTPError as e:
         from fastapi import HTTPException
         status = getattr(getattr(e, "response", None), "status_code", 502)
@@ -331,6 +346,8 @@ def user_cmm_submit(req: RequestCMMSubmit) -> Dict[str, Any]:
     raw = elgamal_decrypt_bytes(int(user_sk_int), par).decode()
     import json
     obj = json.loads(raw)
+    obj["perf_ap_generate_pa_ms"] = out.get("perf_ap_generate_pa_ms")
+    t_verify_start = time.perf_counter()
     # Verify CMI' = HCGen({CMC}, H(ID)) against PA.APM.CMI
     try:
         hid_str = str(req.hid or "")
@@ -425,6 +442,8 @@ def user_cmm_submit(req: RequestCMMSubmit) -> Dict[str, Any]:
         obj["verified_hash_chain_user"] = (str(local_prev) == str(chain_head or ""))
     except Exception:
         obj["verified_hash_chain_user"] = False
+    t_verify_end = time.perf_counter()
+    obj["perf_user_verify_pa_ms"] = (t_verify_end - t_verify_start) * 1000.0
     return obj
 
 @app.post('/user/create_agent')
