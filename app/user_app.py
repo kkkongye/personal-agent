@@ -246,15 +246,31 @@ def user_recover_phc(req: RequestPHC) -> Dict[str, Any]:
 
 @app.post('/user/recover_both')
 def user_recover_both(req: RecoverBothRequest) -> Dict[str, Any]:
-    from user.apply_agent import request_phc_recover
+    from user.apply_agent import request_phc_recover, request_pa_recover
+    import time
     try:
         hid = sha256_hex(req.user.pii.id_number)
+        
+        # 1. Recover PHC
+        t0 = time.perf_counter()
         phc_obj = request_phc_recover(req.tp_base, req.user)
+        t1 = time.perf_counter()
+        t_phc = (t1 - t0) * 1000.0
+        
         phc = phc_obj.get('PHC') or phc_obj.get('phc') or {}
         if not phc:
             return {"success": False, "error": "phc_recover_failed", "detail": phc_obj, "identity": {"hid": hid, "pii": req.user.pii.model_dump(exclude_none=True), "bi": req.user.bi.model_dump(exclude_none=True)}}
+        
+        # 2. Recover PA
+        t2 = time.perf_counter()
         pa_obj = request_pa_recover(req.ap_base, phc, req.user)
+        t3 = time.perf_counter()
+        t_pa = (t3 - t2) * 1000.0
+        
         did = phc.get("DID") or ((phc.get("ASO") or {}).get("TPM") or {}).get("CDID")
+        
+        # 3. TP Reveal Identity
+        t4 = time.perf_counter()
         try:
             sec = reveal_identity(RevealByDidRequest(did=str(did)))
             pii_out = (sec.get("pii") or {})
@@ -262,7 +278,18 @@ def user_recover_both(req: RecoverBothRequest) -> Dict[str, Any]:
         except Exception:
             pii_out = req.user.pii.model_dump(exclude_none=True)
             bi_out = req.user.bi.model_dump(exclude_none=True)
-        return {"success": True, "phc": phc, "pa": pa_obj, "identity": {"hid": hid, "pii": pii_out, "bi": bi_out}}
+        t5 = time.perf_counter()
+        t_reveal = (t5 - t4) * 1000.0
+        
+        return {
+            "success": True, 
+            "phc": phc, 
+            "pa": pa_obj, 
+            "identity": {"hid": hid, "pii": pii_out, "bi": bi_out},
+            "perf_recover_phc_ms": t_phc,
+            "perf_recover_pa_ms": t_pa,
+            "perf_tp_reveal_ms": t_reveal
+        }
     except Exception as e:
         return {"success": False, "error": str(e)}
 

@@ -1,3 +1,9 @@
+import sys
+import os
+
+# Add project root to sys.path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from crypto_lib import generate_paillier_keypair, dl_generate_keypair
 tp_paillier = generate_paillier_keypair(nbits=128)
 tp_sk, tp_pk = dl_generate_keypair()
