@@ -35,6 +35,7 @@ EXEMPT_PATHS = [
     "/wba/user/",  # Allow access to DID documents
     "/",  # Allow access to root endpoint
     "/v1/chat",
+    "/v1/chat/anp",  # Allow ANP chat endpoint
     "/v1/vision",
     "/v1/ui-config",
     "/v1/tts",
@@ -44,6 +45,9 @@ EXEMPT_PATHS = [
     "/ad.json",  # Alias path if mounted at root in future
     "/agents",  # Allow agents listing
     "/agents/",  # Allow all paths under /agents (e.g., /agents/{name}/info)
+    "/consent/pending", # Allow frontend to poll pending consent requests
+    "/consent/decide", # Allow frontend to submit consent decisions
+    "/consent/status", # Allow frontend to check consent status
 ]
 
 
@@ -121,6 +125,18 @@ async def authenticate_request(request: Request) -> dict | None:
                 request.url.path,
                 exempt_path,
             )
+            
+            # Even if exempt, try to authenticate if Authorization header is present
+            # This allows extracting user identity (DID) for exempt paths like /agents/jsonrpc
+            auth_header = request.headers.get("Authorization")
+            if auth_header:
+                try:
+                    logger.info("Attempting optional authentication for exempt path")
+                    return await verify_auth_header(request)
+                except Exception as e:
+                    logger.warning(f"Optional authentication failed for exempt path: {e}")
+                    return None
+            
             return None
 
     # 特殊处理：允许 /anp/status 单点免认证（避免大小写或尾随斜杠差异）
@@ -138,6 +154,7 @@ async def auth_middleware(request: Request, call_next: Callable) -> Response:
         response_auth = await authenticate_request(request)
         headers = dict(request.headers)
         request.state.headers = headers
+        request.state.auth = response_auth
         logger.info("Authenticated request headers stored in request.state")
         logger.info("Authenticated Response auth: %s", response_auth)
 

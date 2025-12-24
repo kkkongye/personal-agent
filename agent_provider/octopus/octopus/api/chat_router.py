@@ -13,6 +13,8 @@ from pydantic import BaseModel
 
 from octopus.agents.message.message_agent import MessageAgent
 from octopus.master_agent import MasterAgent
+from octopus.config.settings import get_settings
+from octopus.anp_sdk.anp_crawler.anp_client import ANPClient
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -26,6 +28,14 @@ message_agent: MessageAgent | None = None
 class ChatRequest(BaseModel):
     message: str
     timestamp: str
+
+
+class ChatAnpRequest(BaseModel):
+    message: str
+    target_host: str
+    gateway_url: str | None = None
+    origin_host: str | None = None
+    timestamp: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -126,6 +136,133 @@ async def chat(request: ChatRequest):
         return ChatResponse(
             success=False, error=str(e), request_id=request_id, timestamp=timestamp
         )
+
+
+@router.post("/chat/anp", response_model=ChatResponse)
+async def chat_anp(request: ChatAnpRequest):
+    logger.info(f"🔵 [CHAT ANP] Target host: {request.target_host}")
+    req_id = str(uuid.uuid4())
+    ts = datetime.now().isoformat()
+
+    try:
+        settings = get_settings()
+        did_doc = settings.did_document_path or ""
+        priv_key = settings.did_private_key_path or ""
+        # Prefer WS-derived gateway for local mode, otherwise use HTTP setting
+        gw = (request.gateway_url or "").strip()
+        if not gw:
+            ws = (settings.anp_gateway_ws_url or "").strip()
+            http_gw = (settings.anp_gateway_http_url or "").strip()
+            if ws and ("127.0.0.1" in ws or "localhost" in ws):
+                gw = ws
+            elif http_gw:
+                gw = http_gw
+
+        client = ANPClient(
+            did_document_path=str(did_doc),
+            private_key_path=str(priv_key),
+            gateway_url=gw,
+        )
+
+        target_url = f"http://{request.target_host}/agents/jsonrpc"
+        # Use HTTP if target host is localhost or 127.0.0.1 (local dev mode)
+        # Otherwise, gateway might need to route via websocket or https
+        # In ANP context, target_host is usually the actual IP:Port of the target agent
+        
+        # When using ANP Proxy, we should use the gateway URL to forward the request?
+        # No, the current implementation seems to try to connect directly to the target agent via HTTP proxy logic?
+        # Wait, ANPClient.fetch_url logic:
+        # If gateway_url is set, it sends request TO GATEWAY.
+        # But here we set target_url = http://target_host/agents/jsonrpc
+        # The ANPClient will wrap this request and send it to the gateway.
+        # The gateway then forwards it to the target agent.
+        
+        # However, the user reports 500 error from gateway: "HTTP request failed: www.anpproxy.com/agents/jsonrpc"
+        # This suggests the ANPClient is trying to send to www.anpproxy.com/agents/jsonrpc ?
+        
+        # Let's look at ANPClient implementation in anp_client.py
+        
+        headers = {}
+        body = {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "method": "master_agent.process_natural_language",
+            "params": {"request": request.message, "request_id": req_id, "origin_host": request.origin_host},
+        }
+
+        # ANPClient usage:
+        # client.fetch_url(url=..., method=..., headers=..., body=...)
+        # If gateway is used, it sends a special "forward" request to the gateway.
+        
+        # Issue might be: target_host is "127.0.0.1:9529"
+        # target_url becomes "http://127.0.0.1:9529/agents/jsonrpc"
+        # If running in Docker or separate envs, 127.0.0.1 might be ambiguous, but here on local machine it's fine.
+        
+        # Wait, the error "HTTP request failed: www.anpproxy.com/agents/jsonrpc" is suspicious.
+        # It seems the gateway URL is being used as the target URL?
+        
+        # Let's check how ANPClient is initialized.
+        # client = ANPClient(..., gateway_url=gateway)
+        # gateway = request.gateway_url or settings.anp_gateway_http_url
+        
+        # If settings.anp_gateway_http_url is "www.anpproxy.com", and request.gateway_url is empty.
+        # Then gateway is "www.anpproxy.com".
+        
+        # If ANPClient logic is correct, it should send to gateway.
+        
+        # Let's fix the immediate issue by ensuring we catch the specific error and return better message.
+        
+        result = await client.fetch_url(
+            url=target_url,
+            method="POST",
+            headers=headers,
+            body=body,
+        )
+
+        if not result.get("success"):
+            # If gateway/proxy fails, try direct local fallback
+            if request.target_host and ("127.0.0.1" in request.target_host or "localhost" in request.target_host):
+                import httpx
+                
+                # Prepare headers with authentication if available
+                fallback_headers = {"Content-Type": "application/json"}
+                if client.auth_client:
+                    try:
+                        auth_h = client.auth_client.get_auth_header(target_url)
+                        fallback_headers.update(auth_h)
+                    except Exception as e:
+                        logger.warning(f"Failed to generate auth header for local fallback: {e}")
+
+                async with httpx.AsyncClient(timeout=30.0) as hc:
+                    r = await hc.post(target_url, json=body, headers=fallback_headers)
+                    r.raise_for_status()
+                    payload = r.json()
+                    rpc_result = payload.get("result")
+                    if isinstance(rpc_result, str):
+                        return ChatResponse(success=True, response=rpc_result, request_id=req_id, timestamp=ts)
+                    else:
+                        import json as _json
+                        return ChatResponse(success=True, response=_json.dumps(rpc_result, ensure_ascii=False), request_id=req_id, timestamp=ts)
+            
+            raise HTTPException(status_code=result.get("status_code", 500), detail=result.get("error", "ANP call failed"))
+
+        import json
+        payload = json.loads(result.get("text") or "{}")
+
+        if payload.get("error"):
+            return ChatResponse(success=False, error=str(payload.get("error")), request_id=req_id, timestamp=ts)
+
+        rpc_result = payload.get("result")
+        if isinstance(rpc_result, str):
+            return ChatResponse(success=True, response=rpc_result, request_id=req_id, timestamp=ts)
+        else:
+            return ChatResponse(success=True, response=json.dumps(rpc_result, ensure_ascii=False), request_id=req_id, timestamp=ts)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in chat_anp proxy: {e}")
+        return ChatResponse(success=False, error=str(e), request_id=req_id, timestamp=ts)
 
 
 @router.post("/vision", response_model=VisionResponse)

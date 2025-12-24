@@ -44,31 +44,36 @@ class ANPClient:
             private_key_path: Path to private key file
             gateway_url: ANP Gateway HTTP endpoint URL (uses settings default if None)
         """
-        if gateway_url is None:
+        if not gateway_url:
             settings = get_settings()
-            # Use configured ANP HTTP gateway URL, with robust normalization
-            if settings.anp_gateway_http_url:
-                raw = settings.anp_gateway_http_url.strip()
-                if raw.startswith("http://") or raw.startswith("https://"):
-                    gateway_url = raw
+            ws_url = (settings.anp_gateway_ws_url or "").strip()
+            http_url = (settings.anp_gateway_http_url or "").strip()
+            prefer_ws = ws_url and ("127.0.0.1" in ws_url or "localhost" in ws_url)
+            if prefer_ws:
+                if ws_url.startswith("ws://"):
+                    gateway_url = ws_url.replace("ws://", "http://", 1)
+                elif ws_url.startswith("wss://"):
+                    gateway_url = ws_url.replace("wss://", "https://", 1)
                 else:
-                    # Default to http if scheme missing
-                    gateway_url = f"http://{raw}"
-            else:
-                # Fallback: derive from WebSocket URL if provided
-                anp_ws_url = (settings.anp_gateway_ws_url or "").strip()
-                if anp_ws_url.startswith("ws://"):
-                    gateway_url = anp_ws_url.replace("ws://", "http://", 1)
-                elif anp_ws_url.startswith("wss://"):
-                    gateway_url = anp_ws_url.replace("wss://", "https://", 1)
-                else:
-                    # Final fallback - should not happen with proper config
-                    raise ValueError(
-                        "No ANP gateway URL configured. Please set ANP_GATEWAY_HTTP_URL or ANP_GATEWAY_WS_URL."
-                    )
-                # Drop trailing /ws if present
+                    gateway_url = ws_url
                 if gateway_url.endswith("/ws"):
                     gateway_url = gateway_url[:-3]
+            elif http_url:
+                if http_url.startswith(("http://", "https://")):
+                    gateway_url = http_url
+                else:
+                    gateway_url = f"http://{http_url}"
+            elif ws_url:
+                if ws_url.startswith("ws://"):
+                    gateway_url = ws_url.replace("ws://", "http://", 1)
+                elif ws_url.startswith("wss://"):
+                    gateway_url = ws_url.replace("wss://", "https://", 1)
+                else:
+                    gateway_url = ws_url
+                if gateway_url.endswith("/ws"):
+                    gateway_url = gateway_url[:-3]
+            else:
+                raise ValueError("No ANP gateway URL configured. Provide WS or HTTP gateway.")
 
         self.did_document_path = did_document_path
         self.private_key_path = private_key_path
@@ -152,6 +157,10 @@ class ANPClient:
         if parsed_url.query:
             gateway_url += f"?{parsed_url.query}"
 
+        # If original_host is localhost or 127.0.0.1, we need to be careful.
+        # If we send Host: 127.0.0.1 to the gateway, the gateway might try to route to itself or fail if it expects a registered domain.
+        # But in local dev mode (ANP Proxy), 127.0.0.1:port is used to identify the agent.
+        
         logger.info(f"ANP request: {method} {gateway_url} (original: {url})")
 
         # Add basic request headers
@@ -159,6 +168,7 @@ class ANPClient:
             headers["Content-Type"] = "application/json"
 
         # Set Host header for Gateway routing
+        # IMPORTANT: The gateway uses the Host header to determine the destination agent.
         headers["Host"] = original_host
 
         # Add DID authentication
@@ -169,8 +179,9 @@ class ANPClient:
             except Exception as e:
                 logger.error(f"Failed to get authentication header: {str(e)}")
 
-        # Set reasonable timeout for requests
-        timeout = aiohttp.ClientTimeout(total=30, connect=10, sock_read=10)
+        # Set timeout: JSON-RPC may wait for consent; extend appropriately
+        is_jsonrpc = original_path.endswith("/agents/jsonrpc") and method.upper() == "POST"
+        timeout = aiohttp.ClientTimeout(total=70 if is_jsonrpc else 30, connect=10, sock_read=60 if is_jsonrpc else 10)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             # Prepare request parameters (use gateway_url instead of original url)
             request_kwargs = {
