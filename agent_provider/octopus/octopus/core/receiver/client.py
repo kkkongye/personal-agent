@@ -316,18 +316,38 @@ class ReceiverClient:
                 )
 
             # Connect
+            # Handle websockets version compatibility for extra_headers
+            connect_kwargs = {
+                'ping_interval': self.config.keepalive_interval,
+                'ping_timeout': self.config.timeout_seconds,
+                'close_timeout': self.config.timeout_seconds,
+                'max_size': None
+            }
+            
+            # Use extra_headers if available (newer versions), otherwise additional_headers
+            if headers:
+                import inspect
+                sig = inspect.signature(websockets.connect)
+                if 'extra_headers' in sig.parameters:
+                    connect_kwargs['extra_headers'] = headers
+                elif 'additional_headers' in sig.parameters:
+                    connect_kwargs['additional_headers'] = headers
+                else:
+                    # Fallback for very old versions or if parameter name is different
+                    connect_kwargs['extra_headers'] = headers
+
             self.websocket = await websockets.connect(
                 self.config.gateway_url,
-                extra_headers=headers,
-                ping_interval=self.config.keepalive_interval,
-                ping_timeout=self.config.timeout_seconds,
-                close_timeout=self.config.timeout_seconds,
+                **connect_kwargs
             )
 
             self.connected = True
 
             # Send connection ready notification
             await self._send_connection_ready()
+            
+            # Send explicit registration message with host info for local dev
+            await self._send_registration()
 
             # Start tasks with error handling
             self._message_task = asyncio.create_task(self._handle_messages())
@@ -368,6 +388,39 @@ class ReceiverClient:
         except Exception as e:
             logger.error(
                 f"Failed to send connection ready notification, error={str(e)}"
+            )
+
+    async def _send_registration(self) -> None:
+        """Send registration message to gateway with host info."""
+        if not self.websocket:
+            return
+
+        try:
+            # Construct host string (e.g., localhost:9527)
+            # Use local_host if available, otherwise try to detect?
+            # Config has local_host and local_port.
+            host_str = f"{self.config.local_host}:{self.config.local_port}"
+            
+            # If local_host is 0.0.0.0, we should probably use localhost or 127.0.0.1 for registration
+            # so the gateway knows how to route requests to us (conceptually).
+            # But actually, the gateway routes by connection ID, not by making a new connection to us.
+            # The 'host' here is just a logical identifier for the routing table.
+            if self.config.local_host == "0.0.0.0":
+                host_str = f"127.0.0.1:{self.config.local_port}"
+                
+            register_message = {
+                "type": "register",
+                "host": host_str,
+                "timestamp": int(time.time()),
+            }
+
+            logger.info(f"🔵 [CONNECTION] Sending registration for host: {host_str}")
+            await self.websocket.send(json.dumps(register_message))
+            logger.info("🟢 [CONNECTION] Registration sent")
+
+        except Exception as e:
+            logger.error(
+                f"Failed to send registration, error={str(e)}"
             )
 
     async def _handle_messages(self) -> None:

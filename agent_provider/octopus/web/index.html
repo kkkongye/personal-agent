@@ -9,61 +9,122 @@
 </head>
 <body>
     <div class="container">
-        <!-- Header -->
-        <header class="header">
-            <div class="header-content">
-                <h1 class="title">
-                    <span class="title-icon">🐙</span>
-                    Octopus AI Assistant
-                </h1>
-                <div class="status-indicator" id="statusIndicator">
-                    <span class="status-dot"></span>
-                    <span class="status-text">Ready</span>
-                </div>
-            </div>
-        </header>
+        <!-- Sidebar Toggle -->
+        <button id="sidebarToggle" class="sidebar-toggle" aria-label="Toggle Settings">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 12h18M3 6h18M3 18h18"/>
+            </svg>
+        </button>
 
-        <!-- Chat Container -->
-        <main class="chat-container">
-            <div class="chat-messages" id="chatMessages">
-                <!-- Welcome Message -->
-                <div class="message assistant-message">
-                    <div class="message-avatar">
-                        <span>🤖</span>
-                    </div>
-                    <div class="message-content">
-                        <p>你好！我是Octopus AI助手。我可以帮助你处理各种任务，比如发送消息、分析文本等。请告诉我你需要什么帮助？</p>
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <h2>设置</h2>
+                <button id="sidebarClose" class="sidebar-close">&times;</button>
+            </div>
+            
+            <div class="sidebar-content">
+                <div class="setting-group">
+                    <h3>通信模式</h3>
+                    <div class="mode-switch">
+                        <label class="radio-label">
+                            <input type="radio" name="mode" value="local" checked>
+                            <span class="radio-custom"></span>
+                            <span>本地模式</span>
+                        </label>
+                        <label class="radio-label">
+                            <input type="radio" name="mode" value="anp">
+                            <span class="radio-custom"></span>
+                            <span>ANP 通信</span>
+                        </label>
                     </div>
                 </div>
-            </div>
 
-            <!-- Input Area -->
-            <div class="input-container">
-                <div class="input-wrapper">
-                    <textarea
-                        id="messageInput"
-                        placeholder="输入你的消息..."
-                        rows="1"
-                        maxlength="2000"
-                    ></textarea>
-                    <label for="imageInput" class="sr-only">选择图片</label>
-                    <input id="imageInput" type="file" accept="image/*" title="选择图片" aria-label="选择图片" aria-labelledby="addImageButton" style="position:absolute; left:-9999px; width:1px; height:1px; opacity:0;" />
-                    <button id="addImageButton" class="add-image-button" type="button" aria-label="添加图片" title="添加图片">＋</button>
-                    <span id="imageFileName" class="image-filename"></span>
-                    <button id="sendButton" class="send-button" type="button" aria-label="发送" title="发送" disabled>
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M2 21L23 12L2 3V10L17 12L2 14V21Z" fill="currentColor"/>
-                        </svg>
-                    </button>
-                </div>
-                <div class="image-preview" id="imagePreview" aria-live="polite" aria-label="图片预览"></div>
-                <div class="input-footer">
-                    <span class="character-count" id="characterCount">0/2000</span>
+                <div id="anpSettings" class="setting-group hidden">
+                    <h3>ANP 配置</h3>
+                    <div class="input-group">
+                        <label for="targetHost">目标主机 (Host:Port)</label>
+                        <input type="text" id="targetHost" placeholder="127.0.0.1:9529" value="127.0.0.1:9529">
+                    </div>
+                    <div class="input-group">
+                        <label for="gatewayUrl">网关地址 (可选)</label>
+                        <input type="text" id="gatewayUrl" placeholder="ws://127.0.0.1:8765/ws">
+                    </div>
                 </div>
             </div>
-        </main>
+        </aside>
+
+        <!-- Main Content Wrapper -->
+        <div class="main-content">
+            <!-- Header -->
+            <header class="header">
+                <div class="header-content">
+                    <h1 class="title">
+                        <span class="title-icon">🐙</span>
+                        Octopus AI Assistant
+                    </h1>
+                    <div class="status-indicator" id="statusIndicator">
+                        <span class="status-dot"></span>
+                        <span class="status-text">Ready</span>
+                    </div>
+                </div>
+            </header>
+    
+            <!-- Chat Container -->
+            <main class="chat-container">
+                <div class="chat-messages" id="chatMessages">
+                    <!-- Welcome Message -->
+                    <div class="message assistant-message">
+                        <div class="message-avatar">
+                            <span>🤖</span>
+                        </div>
+                        <div class="message-content">
+                            <p>你好！我是Octopus AI助手。我可以帮助你处理各种任务，比如发送消息、分析文本等。请告诉我你需要什么帮助？</p>
+                        </div>
+                    </div>
+                </div>
+    
+                <!-- Input Area -->
+                <div class="input-container">
+                    <div class="input-wrapper">
+                        <textarea
+                            id="messageInput"
+                            placeholder="输入你的消息..."
+                            rows="1"
+                            maxlength="2000"
+                        ></textarea>
+                        <label for="imageInput" class="sr-only">选择图片</label>
+                        <input id="imageInput" type="file" accept="image/*" title="选择图片" aria-label="选择图片" aria-labelledby="addImageButton" style="position:absolute; left:-9999px; width:1px; height:1px; opacity:0;" />
+                        <button id="addImageButton" class="add-image-button" type="button" aria-label="添加图片" title="添加图片">＋</button>
+                        <span id="imageFileName" class="image-filename"></span>
+                        <button id="sendButton" class="send-button" type="button" aria-label="发送" title="发送" disabled>
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M2 21L23 12L2 3V10L17 12L2 14V21Z" fill="currentColor"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="image-preview" id="imagePreview" aria-live="polite" aria-label="图片预览"></div>
+                    <div class="input-footer">
+                        <span class="character-count" id="characterCount">0/2000</span>
+                    </div>
+                </div>
+            </main>
+        </div>
     </div>
 
     <script src="/static/script.js"></script>
+    <!-- Consent modal template -->
+    <div id="consentModal" class="consent-modal hidden">
+        <div class="consent-dialog">
+            <h3>来自远程请求</h3>
+            <p id="consentDid">请求方 DID：-</p>
+            <p id="consentMethod">调用方法：-</p>
+            <pre id="consentParams" class="consent-params"></pre>
+            <div class="consent-actions">
+                <button id="consentAccept" class="btn-accept">接受</button>
+                <button id="consentReject" class="btn-reject">拒绝</button>
+            </div>
+        </div>
+    </div>
 </body>
 </html>

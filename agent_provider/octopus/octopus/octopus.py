@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from .agents.message.message_agent import MessageAgent
 from .api.ad_router import router as ad_router, get_agents_description
 from .api.ad_router import get_agent_info as _router_get_agent_info
+from .api.consent_router import router as consent_router
 from .api.chat_router import (
     router as chat_router,
     set_agents,
@@ -37,6 +38,7 @@ logger = get_logger(__name__)
 master_agent = None
 message_agent = None
 text_processor_agent = None
+personal_agent = None
 news_agent = None
 
 # Global ANP Receiver Service instance
@@ -116,6 +118,12 @@ async def lifespan(app: FastAPI):
                 # Log receiver service stats for debugging
                 stats = anp_receiver_service.get_stats()
                 logger.info(f"ANP Receiver Service stats: {stats}")
+                
+                try:
+                    import asyncio
+                    app.state.anp_monitor_task = asyncio.create_task(_monitor_anp_connections())
+                except Exception as e:
+                    logger.warning(f"Failed to start ANP monitor task: {str(e)}")
             except Exception as e:
                 logger.error(f"Failed to start ANP Receiver Service: {str(e)}")
                 # Don't fail the entire application if ANP service fails
@@ -142,12 +150,21 @@ async def lifespan(app: FastAPI):
             logger.info("ANP Receiver Service stopped successfully")
         except Exception as e:
             logger.error(f"Error stopping ANP Receiver Service: {str(e)}")
+    try:
+        task = getattr(app.state, "anp_monitor_task", None)
+        if task and not task.done():
+            task.cancel()
+            import asyncio
+            await asyncio.sleep(0)
+    except Exception:
+        pass
 
     # Cleanup agents with error handling
     cleanup_tasks = [
         ("Master Agent", master_agent),
         ("Message Agent", message_agent),
         ("Text Processor Agent", text_processor_agent),
+        ("Personal Agent", personal_agent),
     ]
 
     for agent_name, agent in cleanup_tasks:
@@ -249,6 +266,7 @@ app.include_router(chat_router, prefix="/v1", tags=["chat"])
 
 # Include agent description router (mounted at /agents)
 app.include_router(ad_router, tags=["agents"])
+app.include_router(consent_router)
 app.include_router(ap_router, tags=["ap"])
 
 # Also expose /ad.json at the root for convenience/tests
@@ -352,6 +370,42 @@ async def get_anp_status():
         "status": "running" if anp_receiver_service.is_running() else "stopped",
         "stats": stats,
     }
+
+
+@app.post("/anp/force-reconnect")
+async def anp_force_reconnect():
+    global anp_receiver_service
+    if not anp_receiver_service or not anp_receiver_service.is_running():
+        return {"success": False, "message": "ANP Receiver Service not running"}
+    try:
+        triggered = 0
+        for svc in anp_receiver_service.did_services.values():
+            client = getattr(svc, "receiver_client", None)
+            if client and hasattr(client, "reconnect_manager"):
+                client.reconnect_manager.force_reconnect()
+                triggered += 1
+        return {"success": True, "triggered": triggered}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+async def _monitor_anp_connections():
+    """Background monitor to keep ANP receiver WS connections healthy."""
+    global anp_receiver_service
+    while True:
+        try:
+            if anp_receiver_service and anp_receiver_service.is_running():
+                for svc in anp_receiver_service.did_services.values():
+                    client = getattr(svc, "receiver_client", None)
+                    if client and (not getattr(client, "connected", False)):
+                        if hasattr(client, "reconnect_manager"):
+                            client.reconnect_manager.force_reconnect()
+            import asyncio
+            await asyncio.sleep(15)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning(f"ANP monitor error: {str(e)}")
+            await asyncio.sleep(15)
 
 
 def run_server() -> None:

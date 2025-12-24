@@ -5,6 +5,7 @@ Provides agent description information and JSON-RPC interfaces.
 
 import json
 import logging
+import asyncio
 from datetime import datetime
 from typing import Any
 
@@ -14,6 +15,7 @@ from pydantic import BaseModel
 
 from octopus.config.settings import get_settings
 from octopus.router.agents_router import router as agent_router
+from octopus.api.consent_router import get_consent_manager
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/agents")
@@ -226,10 +228,66 @@ async def handle_jsonrpc_call(request: Request):
                 },
             )
 
+        # Consent check for master_agent methods
+        if isinstance(method, str) and method.startswith("master_agent."):
+            did = None
+            try:
+                auth = getattr(request.state, "auth", None)
+                if isinstance(auth, dict):
+                    did = auth.get("did")
+            except Exception:
+                did = None
+
+            consent_manager = get_consent_manager()
+            origin_host_val = params.get("origin_host") or headers.get("host")
+            fut = consent_manager.create(
+                request_id=request_id,
+                did=did,
+                method=method,
+                params_preview={k: params.get(k) for k in list(params.keys())[:5]},
+                origin_host=origin_host_val,
+                request_text=params.get("request"),
+            )
+
+            try:
+                accept = await asyncio.wait_for(fut, timeout=60.0)
+            except asyncio.TimeoutError:
+                return JSONResponse(
+                    content={
+                        "jsonrpc": "2.0",
+                        "error": {
+                            "code": -32001,
+                            "message": "Consent timeout",
+                        },
+                        "id": request_id,
+                    }
+                )
+
+            if not accept:
+                return JSONResponse(
+                    content={
+                        "jsonrpc": "2.0",
+                        "error": {
+                            "code": -32002,
+                            "message": "Request rejected by user",
+                        },
+                        "id": request_id,
+                    }
+                )
+
         # Delegate to agent router for handling
         response_dict = agent_router.handle_jsonrpc_call(
             method=method, params=params, request_id=request_id
         )
+
+        try:
+            if isinstance(method, str) and method.startswith("master_agent."):
+                # Extract result text for UI
+                result = response_dict.get("result")
+                result_text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+                consent_manager.set_result(request_id, result_text)
+        except Exception:
+            pass
 
         logger.info(
             f"🟢 [JSON-RPC RESPONSE] Success: {json.dumps(response_dict, ensure_ascii=False, indent=2)}"

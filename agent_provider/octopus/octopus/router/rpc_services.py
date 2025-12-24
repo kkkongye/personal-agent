@@ -20,10 +20,16 @@ _ALLOWED_AGENTS: set[str] = set()
 
 def set_allowed_agents(names: list[str]) -> None:
     global _ALLOWED_AGENTS
-    _ALLOWED_AGENTS = set([str(n) for n in names if n])
+    # Always ensure master_agent is accessible externally
+    base = set([str(n) for n in names if n])
+    base.add("master_agent")
+    _ALLOWED_AGENTS = base
 
 def get_allowed_agents() -> list[str]:
-    return sorted(list(_ALLOWED_AGENTS))
+    # master_agent is always allowed
+    s = set(_ALLOWED_AGENTS) if _ALLOWED_AGENTS else set()
+    s.add("master_agent")
+    return sorted(list(s))
 
 def load_allowed_agents_from_path(path: str | None) -> None:
     if not path:

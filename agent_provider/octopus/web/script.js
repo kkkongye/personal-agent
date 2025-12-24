@@ -11,12 +11,30 @@ class OctopusChat {
             imagePreview: document.getElementById('imagePreview'),
             sendButton: document.getElementById('sendButton'),
             characterCount: document.getElementById('characterCount'),
-            statusIndicator: document.getElementById('statusIndicator')
+            statusIndicator: document.getElementById('statusIndicator'),
+            targetHost: document.getElementById('targetHost'),
+            gatewayUrl: document.getElementById('gatewayUrl'),
+            modeRadios: Array.from(document.querySelectorAll('input[name="mode"]')),
+            consentModal: document.getElementById('consentModal'),
+            consentDid: document.getElementById('consentDid'),
+            consentMethod: document.getElementById('consentMethod'),
+            consentParams: document.getElementById('consentParams'),
+            consentAccept: document.getElementById('consentAccept'),
+            consentReject: document.getElementById('consentReject'),
+            sidebar: document.getElementById('sidebar'),
+            sidebarToggle: document.getElementById('sidebarToggle'),
+            sidebarClose: document.getElementById('sidebarClose'),
+            anpSettings: document.getElementById('anpSettings'),
         };
         this.allowSpeech = false;
 
         this.isLoading = false;
         this.maxCharacters = 2000;
+
+        this.pendingConsent = null;
+        this.consentPollTimer = null;
+        this.consentEmptyPolls = 0;
+        this.consentMaxEmptyPolls = 2;
 
         this.init();
     }
@@ -28,6 +46,9 @@ class OctopusChat {
 
         // Auto-resize textarea
         this.autoResizeTextarea();
+
+        // Start consent polling
+        this.startConsentPolling();
     }
 
     bindEvents() {
@@ -87,12 +108,169 @@ class OctopusChat {
                 this.updateCharacterCount();
             });
         }
+
+        if (this.elements.modeRadios && this.elements.modeRadios.length) {
+            this.elements.modeRadios.forEach(r => r.addEventListener('change', () => {
+                const mode = this.getMode();
+                this.showNotification(mode === 'local' ? '已切换到本地模式' : '已切换到 ANP 通信模式', 'info');
+                
+                // Toggle ANP settings visibility
+                if (this.elements.anpSettings) {
+                    if (mode === 'anp') {
+                        this.elements.anpSettings.classList.remove('hidden');
+                    } else {
+                        this.elements.anpSettings.classList.add('hidden');
+                    }
+                }
+            }));
+        }
+
+        // Consent actions
+        if (this.elements.consentAccept) {
+            this.elements.consentAccept.addEventListener('click', () => this.respondConsent(true));
+        }
+        if (this.elements.consentReject) {
+            this.elements.consentReject.addEventListener('click', () => this.respondConsent(false));
+        }
+
+        // Sidebar events
+        if (this.elements.sidebarToggle) {
+            this.elements.sidebarToggle.addEventListener('click', () => {
+                this.elements.sidebar.classList.add('open');
+            });
+        }
+        if (this.elements.sidebarClose) {
+            this.elements.sidebarClose.addEventListener('click', () => {
+                this.elements.sidebar.classList.remove('open');
+            });
+        }
+        // Close sidebar when clicking outside
+        document.addEventListener('click', (e) => {
+            if (this.elements.sidebar && 
+                this.elements.sidebar.classList.contains('open') && 
+                !this.elements.sidebar.contains(e.target) && 
+                !this.elements.sidebarToggle.contains(e.target)) {
+                this.elements.sidebar.classList.remove('open');
+            }
+        });
     }
 
     autoResizeTextarea() {
         const textarea = this.elements.messageInput;
         textarea.style.height = 'auto';
         textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+    }
+
+    async startConsentPolling() {
+        const poll = async () => {
+            try {
+                const res = await fetch('/consent/pending');
+                const data = await res.json();
+                const pending = (data && data.pending) || [];
+                if (!this.pendingConsent && pending.length > 0) {
+                    this.pendingConsent = pending[0];
+                    this.showConsent(this.pendingConsent);
+                    if (this.consentPollTimer) {
+                        clearInterval(this.consentPollTimer);
+                        this.consentPollTimer = null;
+                    }
+                    this.consentEmptyPolls = 0;
+                } else if (pending.length === 0) {
+                    this.consentEmptyPolls += 1;
+                    if (this.consentPollTimer && this.consentEmptyPolls >= this.consentMaxEmptyPolls) {
+                        clearInterval(this.consentPollTimer);
+                        this.consentPollTimer = null;
+                    }
+                }
+            } catch (_) {}
+        };
+        // poll every 1s
+        this.consentPollTimer = setInterval(poll, 1000);
+        poll();
+    }
+
+    stopConsentPolling() {
+        if (this.consentPollTimer) {
+            clearInterval(this.consentPollTimer);
+            this.consentPollTimer = null;
+        }
+    }
+
+    showConsent(item) {
+        if (!item) return;
+        this.elements.consentDid.textContent = `请求方 DID：${item.did || '-'}`;
+        this.elements.consentMethod.textContent = `调用方法：${item.method}`;
+        this.elements.consentParams.textContent = JSON.stringify(item.params || {}, null, 2);
+        this.elements.consentModal.classList.remove('hidden');
+    }
+
+    async respondConsent(accept) {
+        if (!this.pendingConsent) return;
+        try {
+            const resp = await fetch('/consent/decide', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ request_id: this.pendingConsent.request_id, decision: accept ? 'accept' : 'reject' })
+            });
+            if (!resp.ok) {
+                this.showNotification(`授权操作失败: ${resp.status}`, 'error');
+                return;
+            }
+            const data = await resp.json();
+            if (data && data.success) {
+                this.showNotification(accept ? '已接受请求' : '已拒绝请求', accept ? 'success' : 'warning');
+                const acceptedItem = this.pendingConsent; // capture before reset
+                this.elements.consentModal.classList.add('hidden');
+                this.stopConsentPolling();
+
+                if (accept) {
+                    const origin = data.origin_host || '未知来源';
+                    const reqText = data.request_text || (acceptedItem?.params?.request) || '';
+                    this.addMessage(`接收来自${origin}的请求 “${reqText}”`, 'user');
+                    const rid = data.request_id || (acceptedItem && acceptedItem.request_id) || null;
+                    if (rid) this.pollConsentResult(rid);
+                }
+
+                this.pendingConsent = null;
+                return;
+            }
+            this.showNotification('授权接口返回异常', 'error');
+        } catch (_) {}
+    }
+
+    async pollConsentResult(requestId) {
+        if (!requestId) return;
+        let resultShown = false;
+
+        const check = async () => {
+            try {
+                const res = await fetch(`/consent/status?request_id=${encodeURIComponent(requestId)}`);
+                if (!res.ok) return null;
+                const info = await res.json();
+                return info;
+            } catch (_) {
+                return null;
+            }
+        };
+
+        const showIfReady = async () => {
+            const info = await check();
+            if (!info) return false;
+            if (info.status === 'completed' && info.result && !resultShown) {
+                this.addMessage(info.result, 'assistant');
+                resultShown = true;
+                return true;
+            }
+            return false;
+        };
+
+        const initialDone = await showIfReady();
+        if (initialDone) return;
+
+        const timer = setInterval(async () => {
+            const done = await showIfReady();
+            if (done) clearInterval(timer);
+        }, 500);
     }
 
     updateCharacterCount() {
@@ -220,17 +398,34 @@ class OctopusChat {
 
         try {
             let response;
-            if (imageFile) {
-                const fd = new FormData();
-                fd.append('prompt', messageText || '');
-                fd.append('image', imageFile);
-                response = await fetch('/v1/vision', { method: 'POST', body: fd });
-            } else {
-                response = await fetch('/v1/chat', {
+            const mode = this.getMode();
+
+            if (mode === 'anp') {
+                const targetHost = (this.elements.targetHost?.value || '127.0.0.1:9529').trim();
+                const gatewayUrl = (this.elements.gatewayUrl?.value || '').trim();
+                response = await fetch('/v1/chat/anp', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message: messageText, timestamp: new Date().toISOString() })
+                    body: JSON.stringify({
+                        message: messageText,
+                        target_host: targetHost,
+                        gateway_url: gatewayUrl || undefined,
+                        origin_host: window.location.host
+                    })
                 });
+            } else {
+                if (imageFile) {
+                    const fd = new FormData();
+                    fd.append('prompt', messageText || '');
+                    fd.append('image', imageFile);
+                    response = await fetch('/v1/vision', { method: 'POST', body: fd });
+                } else {
+                    response = await fetch('/v1/chat', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ message: messageText, timestamp: new Date().toISOString() })
+                    });
+                }
             }
 
             if (!response.ok) {
@@ -349,6 +544,22 @@ class OctopusChat {
         try {
             const parsed = JSON.parse(content);
             if (typeof parsed === 'object') {
+                const wr = parsed && parsed.weather_results && Array.isArray(parsed.weather_results) ? parsed.weather_results[0] : null;
+                const now = wr && wr.now ? wr.now : null;
+                if (now) {
+                    const parts = [];
+                    if (now.text) parts.push(now.text);
+                    if (now.temp) parts.push(`${now.temp}°C`);
+                    if (now.feelsLike) parts.push(`体感${now.feelsLike}°C`);
+                    const wind = [now.windDir, now.windSpeed].filter(Boolean).join(' ');
+                    if (wind) parts.push(`风：${wind}`);
+                    if (now.humidity) parts.push(`湿度${now.humidity}%`);
+                    if (now.pressure) parts.push(`气压${now.pressure}hPa`);
+                    if (now.vis) parts.push(`能见度${now.vis}km`);
+                    const summary = `天气：${parts.join('，')}`;
+                    const link = wr && wr.fxLink ? `<a href="${wr.fxLink}" target="_blank" rel="noopener noreferrer">查看详情</a>` : '';
+                    return `<p>${summary}${link ? ' · ' + link : ''}</p>`;
+                }
                 return `<pre>${JSON.stringify(parsed, null, 2)}</pre>`;
             }
         } catch (e) {
@@ -505,6 +716,11 @@ class OctopusChat {
                 document.body.removeChild(notification);
             }, 300);
         }, 3000);
+    }
+
+    getMode() {
+        const checked = this.elements.modeRadios ? this.elements.modeRadios.find(r => r.checked) : null;
+        return checked ? checked.value : 'local';
     }
 }
 

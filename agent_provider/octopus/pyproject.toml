@@ -40,6 +40,9 @@ dependencies = [
     "click>=8.0.0",
     # Database support
     "pymysql>=1.0.0",
+    # NLP
+    "spacy>=3.0.0",
+    "langdetect>=1.0.0",
 ]
 
 [project.optional-dependencies]
